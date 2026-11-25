@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   centerOnPrimary,
   keepVisible,
+  resizeAnchored,
   resolvePlacement,
+  snapToEdges,
   toSavedPlacement,
   type DisplayArea,
 } from '../../src/main/desktop/placement';
@@ -95,5 +97,43 @@ describe('centerOnPrimary', () => {
 
   it('没有标记主屏时用第一块', () => {
     expect(centerOnPrimary([secondary], SIZE)).toEqual({ x: 1920 + Math.round((1707 - 160) / 2), y: 400 });
+  });
+});
+
+describe('snapToEdges', () => {
+  const T = 24;
+
+  it('离边缘较远时不贴边', () => {
+    expect(snapToEdges({ x: 500, y: 300, ...SIZE }, both, T)).toEqual({ x: 500, y: 300 });
+  });
+
+  it('靠近左边和底部时贴边', () => {
+    expect(snapToEdges({ x: 20, y: 1040 - 160 - 10, ...SIZE }, both, T)).toEqual({ x: 0, y: 1040 - 160 });
+  });
+
+  it('靠近右边和顶部时贴边', () => {
+    expect(snapToEdges({ x: 1920 - 160 - 24, y: 24, ...SIZE }, both, T)).toEqual({ x: 1920 - 160, y: 0 });
+  });
+
+  it('拖出可用区时先移回再贴边', () => {
+    expect(snapToEdges({ x: 600, y: 1100, ...SIZE }, both, T)).toEqual({ x: 600, y: 1040 - 160 });
+  });
+
+  it('副屏使用自己的工作区', () => {
+    expect(snapToEdges({ x: 1930, y: 400, ...SIZE }, both, T)).toEqual({ x: 1920, y: 400 });
+  });
+});
+
+describe('resizeAnchored', () => {
+  it('保持底部中点不变', () => {
+    expect(resizeAnchored({ x: 500, y: 300, ...SIZE }, { width: 208, height: 208 }, both)).toEqual({ x: 476, y: 252 });
+    expect(resizeAnchored({ x: 500, y: 300, ...SIZE }, { width: 120, height: 120 }, both)).toEqual({ x: 520, y: 340 });
+  });
+
+  it('放大后超出可用区时移回', () => {
+    expect(resizeAnchored({ x: 1920 - 160, y: 0, ...SIZE }, { width: 208, height: 208 }, both)).toEqual({
+      x: 1920 - 208,
+      y: 0,
+    });
   });
 });

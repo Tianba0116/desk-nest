@@ -1,0 +1,80 @@
+import type { InboxItemDto } from '../../shared/contracts/reminders';
+import { formatTime } from '../../shared/format-time';
+import { useQuery } from './api';
+import { useAction } from './useAction';
+
+export function InboxView() {
+  const { data: items } = useQuery('inbox.list', {}, ['inbox', 'reminders']);
+  const { busy, run } = useAction();
+  const unread = items?.filter((i) => i.status === 'unread').length ?? 0;
+
+  return (
+    <section aria-labelledby="inbox-title">
+      <header className="view-header with-action">
+        <div>
+          <h1 id="inbox-title">信箱</h1>
+          <p className="view-hint">到期的提醒都会留在这里；关闭气泡不会删除，也不会完成待办。</p>
+        </div>
+        {unread > 0 && (
+          <button type="button" disabled={busy} onClick={() => void run('inbox.markAllRead', {})}>
+            全部标为已读
+          </button>
+        )}
+      </header>
+      {items && items.length === 0 && <p className="empty">信箱是空的。</p>}
+      <ul className="card-list" role="list" aria-label="信箱">
+        {items?.map((item) => <InboxCard key={item.id} item={item} />)}
+      </ul>
+    </section>
+  );
+}
+
+function InboxCard({ item }: { item: InboxItemDto }) {
+  const { busy, run } = useAction();
+  const r = item.reminder;
+  const unread = item.status === 'unread';
+
+  // 按提醒的当前状态说明：入箱后被推迟/改期/取消的卡片只显示状态（R15.AC-4）
+  let state: string | null = null;
+  if (!r) state = '提醒已不存在';
+  else if (r.status === 'cancelled') state = '已取消';
+  else if (item.stale && r.status === 'scheduled') state = `已推迟到 ${formatTime(r.dueAt)}`;
+  else if (item.stale) state = '已改期';
+
+  const actionable = unread && !item.stale && r?.status === 'materialized';
+
+  return (
+    <li className={`card inbox-card${unread ? ' is-unread' : ''}`} aria-label={`${unread ? '未读' : '已读'}提醒：${r?.content ?? ''}`}>
+      <div className="inbox-head">
+        {unread && <span className="unread-dot" aria-hidden="true" />}
+        <span className="badge">⏰ 提醒</span>
+        <h3 className="card-title-inline">{r?.content ?? '（已删除）'}</h3>
+      </div>
+      <p className="meta">
+        {item.dueAt !== null && <span>{formatTime(item.dueAt)} 到期</span>}
+        {r?.task && <span>关联待办：{r.task.title}</span>}
+        {state && <span>{state}</span>}
+        {!unread && item.readAt !== null && <span>已读</span>}
+      </p>
+      {actionable && r && (
+        <div className="card-actions spaced">
+          <button type="button" className="primary" disabled={busy} onClick={() => void run('inbox.markRead', { ids: [item.id] })}>
+            知道了
+          </button>
+          {[10, 60].map((minutes) => (
+            <button key={minutes} type="button" disabled={busy} onClick={() => void run('reminders.snooze', { id: r.id, minutes })}>
+              {minutes === 60 ? '1 小时后' : `${minutes} 分钟后`}再提醒
+            </button>
+          ))}
+        </div>
+      )}
+      {unread && !actionable && (
+        <div className="card-actions spaced">
+          <button type="button" disabled={busy} onClick={() => void run('inbox.markRead', { ids: [item.id] })}>
+            标为已读
+          </button>
+        </div>
+      )}
+    </li>
+  );
+}

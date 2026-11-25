@@ -1,14 +1,12 @@
 import { join } from 'node:path';
-import { BrowserWindow, type WebContents } from 'electron';
-import type { Point, Size } from './placement';
+import { BrowserWindow } from 'electron';
+import { hardenWebContents } from './web-contents';
+import type { Rect } from './placement';
 
-/** 窗口只比角色略大，不使用覆盖整屏的透明窗口（R02.AC-7） */
-export const PET_WINDOW_SIZE: Size = { width: 160, height: 160 };
-
-export function createPetWindow(position: Point): BrowserWindow {
+/** 窗口只比角色略大（尺寸见 petWindowSize），不使用覆盖整屏的透明窗口（R02.AC-7） */
+export function createPetWindow(bounds: Rect): BrowserWindow {
   const win = new BrowserWindow({
-    ...PET_WINDOW_SIZE,
-    ...position,
+    ...bounds,
     show: false,
     frame: false,
     transparent: true,
@@ -32,7 +30,8 @@ export function createPetWindow(position: Point): BrowserWindow {
     },
   });
 
-  // 外部全屏时的叠放策略在 M2 处理（R02.AC-8、D-04）；M1 使用普通置顶层级
+  // 只用普通置顶层级，不使用 screen-saver 等会盖过全屏窗口的层级；
+  // 外部全屏时由 FullscreenGuard 隐藏宠物（R02.AC-8、D-04）
   win.setAlwaysOnTop(true, 'floating');
   // 默认穿透；指针进入角色轮廓时由渲染层请求关闭穿透（TD §12.2）
   win.setIgnoreMouseEvents(true, { forward: true });
@@ -56,10 +55,4 @@ function loadPetPage(win: BrowserWindow): Promise<void> {
   return devServer
     ? win.loadURL(`${devServer}/pet.html`)
     : win.loadFile(join(__dirname, '../renderer/pet.html'));
-}
-
-/** 只加载本地受控页面：禁止跳转和新开窗口（TD §13.3） */
-function hardenWebContents(contents: WebContents): void {
-  contents.on('will-navigate', (event) => event.preventDefault());
-  contents.setWindowOpenHandler(() => ({ action: 'deny' }));
 }

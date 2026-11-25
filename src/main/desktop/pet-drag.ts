@@ -21,7 +21,7 @@ export class PetDragController {
   constructor(
     private readonly win: BrowserWindow,
     /** 固定窗口尺寸：跨不同缩放比例的显示器移动时，只用 setPosition 会让窗口尺寸漂移 */
-    private readonly size: Size,
+    private readonly size: () => Size,
     private readonly onEnd: (reason: DragEndReason) => void,
   ) {}
 
@@ -55,6 +55,6 @@ export class PetDragController {
     const next = { x: Math.round(cursor.x - this.grabOffset.x), y: Math.round(cursor.y - this.grabOffset.y) };
     if (this.lastPosition && next.x === this.lastPosition.x && next.y === this.lastPosition.y) return;
     this.lastPosition = next;
-    this.win.setBounds({ ...next, ...this.size });
+    this.win.setBounds({ ...next, ...this.size() });
   }
 }

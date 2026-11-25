@@ -24,16 +24,34 @@ body,
   overflow: visible;
 }
 
-/* 稳定的交互轮廓：不随动画逐帧变化（TD §12.2） */
+/* 稳定的交互轮廓：不随动画逐帧变化（TD §12.2）。
+   按 160 DIP 设计稿换算成百分比，随尺寸档位缩放（R04.AC-3） */
 .pet-hit {
   position: absolute;
-  left: 30px;
-  top: 52px;
-  width: 100px;
-  height: 96px;
+  left: 18.75%;
+  top: 32.5%;
+  width: 62.5%;
+  height: 60%;
   border-radius: 50%;
   cursor: grab;
   touch-action: none;
+}
+
+/* 信箱未读标记：不参与命中，不挡点击 */
+.pet-badge {
+  position: absolute;
+  right: 20%;
+  top: 30%;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: #c0392b;
+  color: #ffffff;
+  font: 600 11px/18px 'Segoe UI', sans-serif;
+  text-align: center;
+  box-shadow: 0 0 0 2px #ffffff;
+  pointer-events: none;
 }
 
 .pose-lifted .pet-hit {
@@ -187,13 +205,49 @@ body,
   }
 }
 
-/* 系统开启“减少动画”时去掉循环动画；应用内的开关在 M2 加入（R04.AC-4） */
+/* ---------- 降低动态效果（R04.AC-4） ----------
+   应用内开关（.reduced-motion）或系统“动画效果：关”任一开启即生效：
+   不再呼吸、摆动；一次性动作改为静态姿态加短淡入。 */
+
+@keyframes pet-fade-in {
+  from {
+    opacity: 0.55;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.reduced-motion .pet-body,
+.reduced-motion.pose-idle .pet-body,
+.reduced-motion.pose-lifted .pet-body {
+  animation: none;
+}
+
+.reduced-motion.pose-landing .pet-body,
+.reduced-motion.pose-touched .pet-body {
+  animation: pet-fade-in 160ms ease-out;
+}
+
+.reduced-motion .pet-eye,
+.reduced-motion .pet-shadow {
+  transition: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .pet-body,
   .pose-idle .pet-body,
-  .pose-lifted .pet-body,
+  .pose-lifted .pet-body {
+    animation: none;
+  }
+
   .pose-landing .pet-body,
   .pose-touched .pet-body {
-    animation: none;
+    animation: pet-fade-in 160ms ease-out;
+  }
+
+  .pet-eye,
+  .pet-shadow {
+    transition: none;
   }
 }

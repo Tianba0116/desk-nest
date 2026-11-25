@@ -69,6 +69,31 @@ export function keepVisible(windowBounds: Rect, displays: DisplayArea[]): Point 
   return clampInto(windowBounds, windowBounds, display.workArea);
 }
 
+/** 松手时离工作区边缘不超过 threshold 的一侧贴边（R02.AC-4），结果整体在可用区内 */
+export function snapToEdges(windowBounds: Rect, displays: DisplayArea[], threshold: number): Point {
+  const display = nearestDisplay(centerOf(windowBounds), displays);
+  if (!display) return { x: windowBounds.x, y: windowBounds.y };
+  const area = display.workArea;
+  const right = area.x + area.width - windowBounds.width;
+  const bottom = area.y + area.height - windowBounds.height;
+  let { x, y } = clampInto(windowBounds, windowBounds, area);
+  if (x - area.x <= threshold) x = area.x;
+  else if (right - x <= threshold) x = right;
+  if (y - area.y <= threshold) y = area.y;
+  else if (bottom - y <= threshold) y = bottom;
+  return clampInto({ x, y }, windowBounds, area);
+}
+
+/** 改变窗口尺寸时保持底部中点不动（角色“站”在原地），再移入可见区域 */
+export function resizeAnchored(windowBounds: Rect, size: Size, displays: DisplayArea[]): Point {
+  const next = {
+    x: Math.round(windowBounds.x + windowBounds.width / 2 - size.width / 2),
+    y: Math.round(windowBounds.y + windowBounds.height - size.height),
+    ...size,
+  };
+  return keepVisible(next, displays);
+}
+
 export function centerOnPrimary(displays: DisplayArea[], size: Size): Point {
   const display = primaryDisplay(displays);
   if (!display) return { x: 0, y: 0 };
