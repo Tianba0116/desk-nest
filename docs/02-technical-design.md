@@ -212,6 +212,8 @@ UI preload 暴露 `notes.create`、`reminders.reschedule` 等命名方法，内�
   → 发失效通知；返回真实结构化结果
 ```
 
+**M3 实现。** `application/commands.ts` 的 `CommandService` 按上面的协议执行；命令用 `defineCommand` 定义（名称、Zod 输入、同步执行函数、失效范围、`exposeToModel` 默认否），在 `application/core.ts` 注册。小窝窗口只能通过 `nest:command`（名称 + 输入 + operationId，来源由主进程固定为 ui）和 `nest:query`（查询注册表）访问数据，主进程校验发送方是小窝窗口。渲染层在点击时生成 operationId，IPC 本身失败时用同一 ID 重试一次。数据库是 userData 下的 `desk-nest.db`（WAL），迁移在 `storage/migrations.ts` 追加，升级已有库前备份到 `backups/`。
+
 关键性质：事务失败，业务和收据一起回滚；提交后 IPC 回复丢失，客户端以同 operationId 重试会取回结果。通知丢失不丢业务数据，窗口重新查询即可恢复。
 
 schema、权限等错误不缓存成成功收据。失败重试若参数发生变化，应产生新的逻辑操作 ID。网络请求绝不放进此事务。
@@ -245,6 +247,8 @@ interface ModelAdapter {
   stream(request: ModelRequest, signal: AbortSignal): AsyncIterable<ModelEvent>;
 }
 ```
+
+**M5 实现。** `conversation/model-adapter.ts` 定义接口；`conversation/adapters/registry.ts` 登记 `AdapterDefinition`（id、配置 schema、create）；首个实现是 `openai-compatible.ts`。模型配置存 `app_settings` 的 `model.config`（不含密钥），密钥经 safeStorage 加密后存 `model.secret`，加密不可用时只放内存。对话窗口是独立的 `ChatHost` 窗口：发送和重试是命令（`chat.send` / `chat.retry`，带 operationId，用户消息与 turn 同一事务），提交后在事务外由 `ConversationRunner` 流式请求，结束时短事务写入回复和轮次状态；流式文字约每 50 ms 推送一次。上下文 = 系统提示（能力边界：只能聊天）+ 最近 12 条有效消息（已完成轮次的用户消息和完整回复）。`turns` 上有部分唯一索引保证同一对话最多一个进行中的轮次。
 
 这是本地抽象，不假定所有“兼容协议”实现具有相同功能。P0 测试所选服务的流、工具参数、取消、错误返回和工具结果续传。没有工具调用能力时只提供聊天及本地表单，不假装自然语言工具已经可用。
 
@@ -561,6 +565,7 @@ P0 验证方案：小尺寸透明窗口，角色配置一个简单稳定的交�
 - 保存 displayId、相对可用区位置及比例；拔屏后选择现有屏幕并夹紧到 workArea。
 - 附属窗口每次展开或屏幕变化重新定位；拖动时可暂时收起附属面板，避免多窗口每帧同步。
 - 多屏移动时覆盖负坐标和混合 DPI；模型不参与任何拖动坐标或动画帧计算。
+- M2 起尺寸分小（120）、中（160）、大（208 DIP）三档，切换时保持窗口底部中点；交互轮廓用百分比定义，随尺寸缩放。松手时离工作区边缘 24 DIP 以内的一侧贴边。
 - M1 实现：渲染层只发送“开始拖动”和“结束拖动”，不发送坐标。拖动期间，主进程每 16 ms 读取一次光标屏幕坐标并移动窗口。移动窗口时用 `setBounds` 传入固定尺寸，避免在混合 DPI 屏幕之间移动时窗口尺寸漂移。屏幕变化引起的位置修正不写入保存的位置。M3 引入 SQLite 之前，位置存放在 userData 下的 `pet-placement.json`，写入方式为临时文件加重命名。
 
 文字拖入优先支持在明确的面板 dropzone 完成；完整首版若要求直接拖到宠物，必须通过原生拖入与穿透组合测试。P1 未完成时在能力清单明确标注。
@@ -580,6 +585,8 @@ Electron 自己窗口的 full-screen 事件只说明本应用窗口，不能用�
 - `fullscreen === true`：隐藏 PetWindow（停止动画），退出全屏后恢复原位置；用户设置“全屏时保持显示”时跳过。
 - `fullscreen === 'unknown'`：保持显示，但不使用会盖过全屏窗口的置顶层级（例如 Electron `setAlwaysOnTop` 的 `screen-saver` 等高层级）。P0 实测普通置顶层级与各类全屏应用（独占全屏游戏、无边框全屏、视频播放器、浏览器全屏）的叠放关系，记录哪些层级会盖过全屏窗口。
 - 隐藏和恢复由 DesktopHost 执行，不写入用户的“隐藏宠物”设置，避免与用户的手动隐藏混淆。
+
+**M2 实现。** `desktop/context/` 下定义接口与纯判定函数 `evaluateFullscreen`，按平台在注册表中选择实现；Windows 实现通过 koffi 调用 `GetForegroundWindow`、`GetWindowRect`、`IsZoomed`、`MonitorFromWindow`、`GetMonitorInfoW`、`SHQueryUserNotificationState`，koffi 加载失败时退回 unknown。`FullscreenGuard` 每秒查询一次；PetHost 区分“用户可见性”和“系统抑制”，全屏期间用户从托盘手动显示时，本次全屏结束前不再自动隐藏。判定规则：前台为本进程窗口、桌面/任务栏、最大化窗口时不算全屏；前台窗口与宠物不在同一显示器时不隐藏。
 
 ### 12.5 角色系统
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type PointerEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent } from 'react';
 import { DragGesture } from './drag-gesture';
 import { PetFigure, type PetPose } from './PetFigure';
 
@@ -12,6 +12,8 @@ const HIT_SELECTOR = '[data-pet-hit]';
 
 export function Pet() {
   const [pose, setPose] = useState<PetPose>('idle');
+  const [reducedMotion, setReducedMotion] = useState(false);
+  const [unread, setUnread] = useState(0);
   const gesture = useRef(new DragGesture());
   const interactive = useRef(false);
   const poseTimer = useRef<number | undefined>(undefined);
@@ -61,10 +63,17 @@ export function Pet() {
           playPose('landing');
         } else if (event.type === 'summoned') {
           playPose('landing');
+        } else if (event.type === 'appearance') {
+          setReducedMotion(event.reducedMotion);
+        } else if (event.type === 'inbox') {
+          setUnread(event.unread);
         }
       }),
     [playPose],
   );
+
+  // 订阅建立后再请求当前外观，避免漏掉推送
+  useEffect(() => window.petBridge.ready(), []);
 
   useEffect(() => () => window.clearTimeout(poseTimer.current), []);
 
@@ -83,7 +92,10 @@ export function Pet() {
 
   const onPointerUp = (event: PointerEvent<HTMLDivElement>): void => {
     const result = gesture.current.up(event.pointerId);
-    if (result === 'touch') playPose('touched');
+    if (result === 'touch') {
+      playPose('touched');
+      window.petBridge.touched();
+    }
     if (result === 'drag-end') {
       window.petBridge.dragEnd();
       playPose('landing');
@@ -99,9 +111,23 @@ export function Pet() {
     }
   };
 
+  // 右键菜单由主进程弹出（R02.AC-5）；拖动中不弹
+  const onContextMenu = (event: ReactMouseEvent<HTMLDivElement>): void => {
+    event.preventDefault();
+    if (gesture.current.phase === 'idle') window.petBridge.openMenu();
+  };
+
   return (
-    <div className={`pet pose-${pose}`} onContextMenu={(event) => event.preventDefault()}>
+    <div
+      className={`pet pose-${pose}${reducedMotion ? ' reduced-motion' : ''}`}
+      onContextMenu={(event) => event.preventDefault()}
+    >
       <PetFigure pose={pose} />
+      {unread > 0 && (
+        <div className="pet-badge" aria-hidden="true">
+          {unread > 9 ? '9+' : unread}
+        </div>
+      )}
       <div
         className="pet-hit"
         data-pet-hit
@@ -110,6 +136,7 @@ export function Pet() {
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerCancel}
         onLostPointerCapture={onPointerCancel}
+        onContextMenu={onContextMenu}
       />
     </div>
   );

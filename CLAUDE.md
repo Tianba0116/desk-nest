@@ -1,6 +1,6 @@
 # 桌面陪伴宠物 — 开发约定
 
-当前阶段：**M1 能拖动的宠物**已完成，等待实机验证（`docs/verification/M1.md`）。按 `docs/04-roadmap.md` 的里程碑逐版推进。
+当前阶段：**M1～M5** 已实现，等待实机验证（`docs/verification/M1.md`～`M5.md`）；M5 尚未用真实模型服务测试。下一步是 M6（用一句话操作），开工前先在 `docs/04-roadmap.md` 展开范围。按 `docs/04-roadmap.md` 的里程碑逐版推进。
 
 ## 文档入口（以这些为准）
 

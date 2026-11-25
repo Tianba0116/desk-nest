@@ -4,9 +4,12 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 import { PetIpc, type PetBridge, type PetEvent } from '../shared/contracts/pet-ipc';
 
 const petBridge: PetBridge = {
+  ready: () => ipcRenderer.send(PetIpc.ready),
   dragStart: () => ipcRenderer.send(PetIpc.dragStart),
   dragEnd: () => ipcRenderer.send(PetIpc.dragEnd),
   setInteractive: (interactive) => ipcRenderer.send(PetIpc.setInteractive, interactive === true),
+  openMenu: () => ipcRenderer.send(PetIpc.openMenu),
+  touched: () => ipcRenderer.send(PetIpc.touched),
   onEvent: (listener) => {
     const handler = (_event: IpcRendererEvent, payload: PetEvent): void => listener(payload);
     ipcRenderer.on(PetIpc.event, handler);

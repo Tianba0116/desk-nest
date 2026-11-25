@@ -1,9 +1,8 @@
 // 宠物位置的持久化。M1 还没有数据库（M3 引入 SQLite），先存一个小 JSON 文件。
-// 写入采用“临时文件 + 重命名”，强制关闭时不会留下半个文件。
 
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
 import { z } from 'zod';
+import type { AppSettings } from '../storage/app-settings';
+import { readJsonFile, writeJsonFile } from '../storage/json-file';
 import type { SavedPlacement } from './placement';
 
 const RectSchema = z.object({
@@ -13,43 +12,51 @@ const RectSchema = z.object({
   height: z.number().finite(),
 });
 
-const PlacementFileSchema = z.object({
-  version: z.literal(1),
-  placement: z.object({
-    displayId: z.number().finite(),
-    displayBounds: RectSchema,
-    relX: z.number().min(0).max(1),
-    relY: z.number().min(0).max(1),
-  }),
+export const SavedPlacementSchema = z.object({
+  displayId: z.number().finite(),
+  displayBounds: RectSchema,
+  relX: z.number().min(0).max(1),
+  relY: z.number().min(0).max(1),
 });
 
-export class PlacementStore {
+const PlacementFileSchema = z.object({
+  version: z.literal(1),
+  placement: SavedPlacementSchema,
+});
+
+export interface PlacementPersistence {
+  load(): SavedPlacement | null;
+  save(placement: SavedPlacement): void;
+}
+
+export class PlacementStore implements PlacementPersistence {
   constructor(private readonly filePath: string) {}
 
   /** 文件不存在或内容无效时返回 null，调用方使用默认位置 */
   load(): SavedPlacement | null {
-    let raw: string;
-    try {
-      raw = readFileSync(this.filePath, 'utf8');
-    } catch {
-      return null;
-    }
-    try {
-      const parsed = PlacementFileSchema.safeParse(JSON.parse(raw));
-      return parsed.success ? parsed.data.placement : null;
-    } catch {
-      return null;
-    }
+    return readJsonFile(this.filePath, PlacementFileSchema)?.placement ?? null;
+  }
+
+  /** 位置保存失败不影响使用，下次启动回到默认位置 */
+  save(placement: SavedPlacement): void {
+    writeJsonFile(this.filePath, { version: 1, placement });
+  }
+}
+
+/** M3 起位置存在 app_settings 的 pet.placement 键 */
+export class SettingsPlacementStore implements PlacementPersistence {
+  static readonly key = 'pet.placement';
+
+  constructor(private readonly settings: AppSettings) {}
+
+  load(): SavedPlacement | null {
+    return this.settings.get(SettingsPlacementStore.key, SavedPlacementSchema);
   }
 
   save(placement: SavedPlacement): void {
-    const tempPath = `${this.filePath}.tmp`;
     try {
-      mkdirSync(dirname(this.filePath), { recursive: true });
-      writeFileSync(tempPath, JSON.stringify({ version: 1, placement }, null, 2), 'utf8');
-      renameSync(tempPath, this.filePath);
+      this.settings.set(SettingsPlacementStore.key, placement);
     } catch (error) {
-      // 位置保存失败不影响使用，下次启动回到默认位置
       console.warn('[placement] save failed:', error);
     }
   }
