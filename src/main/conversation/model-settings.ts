@@ -3,9 +3,11 @@
 
 import { z } from 'zod';
 import {
+  DEFAULT_STRATEGY,
   hostOf,
   isLocalUrl,
   MODEL_PRESETS,
+  type ConversationStrategy,
   type ModelSettingsDto,
   type ModelSettingsInput,
 } from '../../shared/contracts/chat';
@@ -33,6 +35,14 @@ type StoredConfig = z.output<typeof ConfigSchema>;
 
 const CONFIG_KEY = 'model.config';
 const SECRET_KEY = 'model.secret';
+const STRATEGY_KEY = 'conversation.strategy';
+const TOOLS_REJECTED_KEY = 'model.toolsRejected';
+const StrategySchema = z.enum(['two_phase', 'stream_retract']);
+
+function configKeyOf(stored: StoredConfig): string {
+  const config = stored.adapterConfig as { baseUrl?: string; model?: string } | null;
+  return `${stored.adapterId}|${config?.baseUrl ?? ''}|${config?.model ?? ''}`;
+}
 
 export class ModelSettingsError extends Error {
   constructor(
@@ -71,7 +81,32 @@ export class ModelSettings {
       keyStorage,
       encryptionAvailable: this.cipher.available(),
       consentedHost: stored?.consentedHost ?? null,
+      strategy: this.strategy(),
+      toolsRejected: stored ? this.isToolsRejected(configKeyOf(stored)) : false,
     };
+  }
+
+  /** 对话流式方案（D-06） */
+  strategy(): ConversationStrategy {
+    return this.settings.get(STRATEGY_KEY, StrategySchema) ?? DEFAULT_STRATEGY;
+  }
+
+  setStrategy(strategy: ConversationStrategy): ModelSettingsDto {
+    this.settings.set(STRATEGY_KEY, StrategySchema.parse(strategy));
+    this.notify();
+    return this.get();
+  }
+
+  /** 这个服务和模型拒绝过带工具的请求：之后只聊天，重新保存设置后再试 */
+  isToolsRejected(configKey: string): boolean {
+    return (this.settings.get(TOOLS_REJECTED_KEY, z.array(z.string())) ?? []).includes(configKey);
+  }
+
+  markToolsRejected(configKey: string): void {
+    const list = this.settings.get(TOOLS_REJECTED_KEY, z.array(z.string())) ?? [];
+    if (list.includes(configKey)) return;
+    this.settings.set(TOOLS_REJECTED_KEY, [...list, configKey].slice(-20));
+    this.notify();
   }
 
   /** 保存配置。云服务首次配置（或换了服务地址）时必须确认发送范围（R18.AC-3） */
@@ -100,13 +135,16 @@ export class ModelSettings {
       consentedHost,
     };
     this.settings.set(CONFIG_KEY, config);
+    // 重新保存时清掉“不支持工具”的记录，下次对话再试一次
+    const rejected = this.settings.get(TOOLS_REJECTED_KEY, z.array(z.string())) ?? [];
+    this.settings.set(TOOLS_REJECTED_KEY, rejected.filter((k) => k !== configKeyOf(config)));
     if (input.apiKey !== undefined) this.setKey(input.apiKey.trim());
     this.notify();
     return this.get();
   }
 
   /** 已配置且可以创建适配器时返回；否则 null（未配置） */
-  createAdapter(fetch: FetchLike): { adapter: ModelAdapter; label: string } | null {
+  createAdapter(fetch: FetchLike): { adapter: ModelAdapter; label: string; configKey: string } | null {
     const stored = this.settings.get(CONFIG_KEY, ConfigSchema);
     if (!stored) return null;
     const definition = getAdapterDefinition(stored.adapterId);
@@ -123,6 +161,8 @@ export class ModelSettings {
     return {
       adapter: definition.create(config.data, key, fetch),
       label: `${preset && preset.id !== 'custom' ? preset.label : (hostOf(baseUrl) ?? '模型')} · ${model}`,
+      /** 区分服务和模型：记录“这个服务不支持工具调用”时使用 */
+      configKey: configKeyOf(stored),
     };
   }
 

@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
 import {
   CHAT_MESSAGE_MAX,
   MODEL_ERROR_TEXT,
+  type ActionCardDto,
   type ChatMessageDto,
   type ChatStatus,
   type LiveTurn,
@@ -9,6 +10,7 @@ import {
 } from '../../shared/contracts/chat';
 import type { CommandResult } from '../../shared/contracts/command';
 import { formatTime } from '../../shared/format-time';
+import { ActionCard } from './ActionCard';
 
 function opId(): string {
   return `chat-${crypto.randomUUID()}`;
@@ -24,6 +26,28 @@ async function withRetry<T>(call: (operationId: string) => Promise<CommandResult
   }
 }
 
+/** 卡片放在所属轮次的回复后面；轮次没有回复文字时放在对应的用户消息后面 */
+function anchorCards(messages: ChatMessageDto[], cards: ActionCardDto[]): { byIndex: Map<number, ActionCardDto[]>; tail: ActionCardDto[] } {
+  const byIndex = new Map<number, ActionCardDto[]>();
+  const tail: ActionCardDto[] = [];
+  for (const card of cards) {
+    let index = -1;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i] as ChatMessageDto;
+      if (m.role === 'assistant' && m.turnId === card.turnId) {
+        index = i;
+        break;
+      }
+    }
+    if (index < 0) index = messages.findIndex((m) => m.id === card.userMessageId);
+    if (index < 0) tail.push(card);
+    else byIndex.set(index, [...(byIndex.get(index) ?? []), card]);
+  }
+  return { byIndex, tail };
+}
+
+const PHASE_TEXT: Record<LiveTurn['phase'], string> = { requesting: '正在想', executing: '执行中', responding: '回复中' };
+
 const STATUS_TEXT: Partial<Record<ChatMessageDto['status'], string>> = {
   pending_retry: '未收到回复',
   cancelled: '已停止',
@@ -33,6 +57,7 @@ const STATUS_TEXT: Partial<Record<ChatMessageDto['status'], string>> = {
 
 export function Chat() {
   const [messages, setMessages] = useState<ChatMessageDto[]>([]);
+  const [cards, setCards] = useState<ActionCardDto[]>([]);
   const [live, setLive] = useState<LiveTurn | null>(null);
   const [status, setStatus] = useState<ChatStatus | null>(null);
   const [draft, setDraft] = useState('');
@@ -44,6 +69,7 @@ export function Chat() {
   const reload = useCallback(async () => {
     const [history, nextStatus] = await Promise.all([window.chat.history(), window.chat.status()]);
     setMessages(history.messages);
+    setCards(history.cards);
     setLive(history.live);
     setStatus(nextStatus);
   }, []);
@@ -72,7 +98,7 @@ export function Chat() {
   useLayoutEffect(() => {
     const el = listRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages, live?.text, live?.phase]);
+  }, [messages, cards.length, live?.text, live?.phase]);
 
   const busy = sending || live !== null;
 
@@ -105,6 +131,19 @@ export function Chat() {
     }
   };
 
+  const anchored = anchorCards(messages, cards);
+  // 停止或失败、但已经有操作执行了：如实标为“部分完成”（R05.AC-2）
+  const doneTurns = new Set(cards.filter((c) => c.state === 'done').map((c) => c.turnId));
+  const doneMessages = new Set(cards.filter((c) => c.state === 'done').map((c) => c.userMessageId));
+  const partial = new Set(
+    messages
+      .filter((m) =>
+        m.role === 'assistant'
+          ? (m.status === 'cancelled' || m.status === 'failed') && !!m.turnId && doneTurns.has(m.turnId)
+          : m.status === 'pending_retry' && doneMessages.has(m.id),
+      )
+      .map((m) => m.id),
+  );
   const retryable = new Set(
     messages.filter((m) => m.role === 'user' && m.status === 'pending_retry').map((m) => m.id),
   );
@@ -114,7 +153,9 @@ export function Chat() {
       <header className="chat-head">
         <div>
           <strong>和宠物聊天</strong>
-          <span className="model">{status ? (status.configured ? status.modelLabel : '未配置模型') : ''}</span>
+          <span className="model">
+            {status ? (status.configured ? `${status.modelLabel ?? ''}${status.toolCalls ? '' : ' · 只能聊天'}` : '未配置模型') : ''}
+          </span>
         </div>
         <div className="head-actions">
           <button type="button" className="link" onClick={() => window.chat.openSettings()}>
@@ -136,13 +177,28 @@ export function Chat() {
             </button>
           </div>
         )}
-        {status?.configured && messages.length === 0 && !live && <p className="empty">说点什么吧～</p>}
-        {messages.map((m) => (
-          <div key={m.id} className={`msg ${m.role}${m.status === 'complete' || m.status === 'sent' ? '' : ' muted'}`}>
+        {status?.configured && messages.length === 0 && !live && (
+          <p className="empty">
+            说点什么吧～
+            {status.toolCalls && (
+              <>
+                <br />
+                也可以说“明天下午三点提醒我改简历”
+              </>
+            )}
+          </p>
+        )}
+        {messages.map((m, index) => (
+          <Fragment key={m.id}>
+          <div className={`msg ${m.role}${m.status === 'complete' || m.status === 'sent' ? '' : ' muted'}`}>
             <div className="bubble-text">{m.content}</div>
             <div className="msg-meta">
               <span>{formatTime(m.createdAt)}</span>
-              {STATUS_TEXT[m.status] && <span className="state">{STATUS_TEXT[m.status]}</span>}
+              {partial.has(m.id) ? (
+                <span className="state">部分完成</span>
+              ) : (
+                STATUS_TEXT[m.status] && <span className="state">{STATUS_TEXT[m.status]}</span>
+              )}
               {retryable.has(m.id) && !busy && (
                 <button type="button" className="link" onClick={() => void retry(m.id)}>
                   重试
@@ -150,14 +206,23 @@ export function Chat() {
               )}
             </div>
           </div>
+          {anchored.byIndex.get(index)?.map((card) => <ActionCard key={card.operationId} card={card} />)}
+          </Fragment>
+        ))}
+        {anchored.tail.map((card) => (
+          <ActionCard key={card.operationId} card={card} />
         ))}
         {live && (
           <div className="msg assistant live">
             <div className="bubble-text">
-              {live.text || <span className="thinking" aria-label="正在想">正在想…</span>}
+              {live.text || (
+                <span className="thinking" aria-label={PHASE_TEXT[live.phase]}>
+                  {PHASE_TEXT[live.phase]}…
+                </span>
+              )}
             </div>
             <div className="msg-meta">
-              <span className="state">{live.phase === 'requesting' && !live.text ? '正在想' : '回复中'}</span>
+              <span className="state">{live.text ? '回复中' : PHASE_TEXT[live.phase]}</span>
             </div>
           </div>
         )}

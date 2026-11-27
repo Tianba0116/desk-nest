@@ -8,6 +8,7 @@ import {
   type ModelSettingsInput,
   type ModelTestResult,
 } from '../../shared/contracts/chat';
+import { PreferencesSection } from './PreferencesSection';
 
 export function SettingsView() {
   const [saved, setSaved] = useState<ModelSettingsDto | null>(null);
@@ -101,11 +102,13 @@ export function SettingsView() {
     <section aria-labelledby="settings-title">
       <header className="view-header">
         <h1 id="settings-title">设置</h1>
-        <p className="view-hint">配置模型后，单击宠物就能聊天。不配置模型时，笔记、待办、提醒都照常可用。</p>
+        <p className="view-hint">配置模型后，单击宠物就能聊天，也能用一句话创建提醒和笔记。不配置模型时，笔记、待办、提醒都照常可用。</p>
       </header>
 
+      <PreferencesSection />
+
       <form className="composer settings-form" onSubmit={save} aria-label="模型设置">
-        <h2 className="section-title first">模型服务</h2>
+        <h2 className="section-title">模型服务</h2>
         <label className="field">
           <span>服务</span>
           <select value={presetId} onChange={(event) => choosePreset(event.target.value)}>
@@ -147,7 +150,7 @@ export function SettingsView() {
             <input type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)} />
             <span>
               我知道和宠物聊天时，我发送的消息和最近的聊天记录会发送到 <strong>{host}</strong>，并按该服务的规则处理。
-              笔记、待办和提醒不会被发送。
+              在对话里让宠物创建的提醒、笔记，其内容和处理结果也属于聊天内容；小窝里已有的笔记、待办和提醒不会被发送。
             </span>
           </label>
         )}
@@ -180,8 +183,33 @@ export function SettingsView() {
         </div>
       </form>
 
+      {saved?.toolsRejected && (
+        <p className="warn">
+          当前的服务或模型不支持工具调用，宠物暂时只能聊天，不能替你创建提醒和笔记。换一个模型，或重新保存设置后会再试一次。
+        </p>
+      )}
+
+      <div className="composer settings-form" aria-label="对话方式">
+        <h2 className="section-title">对话方式（测试中）</h2>
+        <label className="field">
+          <span>回复的显示方式</span>
+          <select
+            value={saved?.strategy ?? 'two_phase'}
+            disabled={!saved}
+            onChange={(event) => {
+              const strategy = event.target.value === 'stream_retract' ? 'stream_retract' : 'two_phase';
+              void window.nest.model({ action: 'setStrategy', strategy }).then((response) => setSaved(response.settings));
+            }}
+          >
+            <option value="two_phase">先判断要不要操作，再显示回复（更稳）</option>
+            <option value="stream_retract">直接显示回复，需要操作时收起重来（更快）</option>
+          </select>
+        </label>
+        <p className="view-hint">两种方式都以下方的结果卡片为准；用来比较哪种体验更好。</p>
+      </div>
+
       <p className="view-hint">
-        密钥只保存在本机并由系统加密，不会显示在界面、写入日志或导出文件。当前版本的宠物只能聊天，不能替你创建提醒或笔记。
+        密钥只保存在本机并由系统加密，不会显示在界面、写入日志或导出文件。宠物能用一句话创建一次性提醒、随手记和设置称呼；修改或取消请点结果卡片上的按钮，或在小窝里操作。
       </p>
     </section>
   );

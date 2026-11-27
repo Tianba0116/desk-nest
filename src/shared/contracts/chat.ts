@@ -1,6 +1,7 @@
 // 对话窗口与模型设置的数据约定（R05、R18）。只放类型和常量。
 
 import type { CommandResult } from './command';
+import type { ReminderDto } from './reminders';
 
 export type MessageStatus = 'sent' | 'pending_retry' | 'complete' | 'streaming' | 'cancelled' | 'failed' | 'interrupted';
 
@@ -9,10 +10,13 @@ export interface ChatMessageDto {
   role: 'user' | 'assistant';
   content: string;
   status: MessageStatus;
+  /** 所属轮次：用户消息是最近一次发送或重试的轮次 */
+  turnId: string | null;
   createdAt: number;
 }
 
-export type TurnPhase = 'requesting' | 'responding';
+/** 正在想 / 执行中 / 回复中 */
+export type TurnPhase = 'requesting' | 'executing' | 'responding';
 
 /** 正在进行的轮次（流式期间由主进程推送） */
 export interface LiveTurn {
@@ -21,6 +25,8 @@ export interface LiveTurn {
   phase: TurnPhase;
   /** 目前已收到的回复文字 */
   text: string;
+  /** 单次流式 + 撤回（D-06）：已显示的文字因为出现工具调用而收起 */
+  retracted?: boolean;
 }
 
 export type ModelErrorCode =
@@ -59,9 +65,51 @@ export interface ChatStatus {
   configured: boolean;
   /** 当前模型的显示名，例如“DeepSeek · deepseek-chat” */
   modelLabel: string | null;
-  /** 支持工具调用的能力；M5 不使用工具，只用于说明 */
+  /** 能否用一句话创建提醒、笔记、称呼；所选服务不支持工具调用时为 false，只能聊天 */
   toolCalls: boolean;
 }
+
+// ---------- 结果卡片（R05.AC-5、R08.AC-2） ----------
+
+/** done 已执行；awaiting_input 等待补充信息；resolved 已由后续回答补全；expired 草稿过期或被放弃 */
+export type ActionCardState = 'done' | 'awaiting_input' | 'failed' | 'cancelled' | 'resolved' | 'expired';
+
+/** 由本地记录渲染的结果卡片；内容取实体的当前状态，不用模型文字 */
+export interface ActionCardDto {
+  operationId: string;
+  turnId: string;
+  /** 卡片所属的用户消息：轮次没有回复文字时，卡片显示在这条消息后面 */
+  userMessageId: string;
+  /** 命令名，例如 reminders.create */
+  kind: string;
+  state: ActionCardState;
+  createdAt: number;
+  reminder?: ReminderDto | null;
+  note?: { id: string; label: string; deleted: boolean } | null;
+  /** 设置后的称呼；null 表示已清除 */
+  nickname?: string | null;
+  /** 重复表达确认后只设置了下一次（R08.AC-7） */
+  onceOnly?: boolean;
+  /** 等待补充信息时的问题 */
+  question?: string;
+  /** 可以直接确认的建议，例如“只设置下一次（…）” */
+  suggestionLabel?: string;
+  /** 失败原因（本地文字） */
+  errorText?: string;
+}
+
+/** 卡片上的按钮：全部走 UI 命令入口，不经过模型 */
+export type ChatActionRequest =
+  | { action: 'confirmDraft'; draftId: string }
+  | { action: 'dismissDraft'; draftId: string }
+  | { action: 'rescheduleReminder'; id: string; revision: number; dueAt: number }
+  | { action: 'cancelReminder'; id: string; revision: number };
+
+export type NestTarget = 'notes' | 'reminders' | 'settings';
+
+/** 对话流式方案（D-06）：two_phase 两段式；stream_retract 单次流式 + 撤回 */
+export type ConversationStrategy = 'two_phase' | 'stream_retract';
+export const DEFAULT_STRATEGY: ConversationStrategy = 'two_phase';
 
 export const ChatIpc = {
   /** invoke：历史消息与进行中的轮次 */
@@ -76,6 +124,10 @@ export const ChatIpc = {
   status: 'chat:status',
   /** send：打开小窝的设置页 */
   openSettings: 'chat:open-settings',
+  /** send：(NestTarget) 打开小窝的指定页 */
+  openNest: 'chat:open-nest',
+  /** invoke：(ChatActionRequest, operationId) 卡片按钮 → CommandResult */
+  action: 'chat:action',
   /** send：收起对话窗口 */
   hide: 'chat:hide',
   /** 主进程 → 渲染层：ChatEvent */
@@ -87,6 +139,7 @@ export const ChatIpc = {
 export interface ChatHistory {
   messages: ChatMessageDto[];
   live: LiveTurn | null;
+  cards: ActionCardDto[];
 }
 
 export interface ChatBridge {
@@ -96,6 +149,8 @@ export interface ChatBridge {
   stop(): void;
   status(): Promise<ChatStatus>;
   openSettings(): void;
+  openNest(target: NestTarget): void;
+  action(request: ChatActionRequest, operationId: string): Promise<CommandResult>;
   hide(): void;
   onEvent(listener: (event: ChatEvent) => void): () => void;
   onChanged(listener: () => void): () => void;
@@ -152,6 +207,10 @@ export interface ModelSettingsDto {
   encryptionAvailable: boolean;
   /** 已确认把对话内容发送到这个服务（R18.AC-3） */
   consentedHost: string | null;
+  /** 对话流式方案（D-06） */
+  strategy: ConversationStrategy;
+  /** 当前服务和模型拒绝过带工具的请求，只能聊天；重新保存设置后再试 */
+  toolsRejected: boolean;
 }
 
 export interface ModelSettingsInput {

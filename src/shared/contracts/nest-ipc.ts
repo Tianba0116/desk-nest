@@ -1,8 +1,9 @@
 // 小窝（CompanionWindow）与主进程之间的 IPC 约定。只放常量和类型。
 
-import type { ModelSettingsDto, ModelSettingsInput, ModelTestResult } from './chat';
+import type { ConversationStrategy, ModelSettingsDto, ModelSettingsInput, ModelTestResult } from './chat';
 import type { CommandResult, DataTopic } from './command';
 import type { NoteDto, RecycledItem, SearchHit, TaskDto } from './notebook';
+import type { PreferencesDto } from './preferences';
 import type { InboxItemDto, ReminderDto } from './reminders';
 
 export const NestIpc = {
@@ -25,7 +26,8 @@ export type NestView = 'inbox' | 'reminders' | 'notes' | 'tasks' | 'recycle' | '
 export type ModelRequest =
   | { action: 'get' }
   | { action: 'save'; input: ModelSettingsInput }
-  | { action: 'test'; input: ModelSettingsInput };
+  | { action: 'test'; input: ModelSettingsInput }
+  | { action: 'setStrategy'; strategy: ConversationStrategy };
 
 export type ModelResponse =
   | { ok: true; settings: ModelSettingsDto; test?: ModelTestResult }
@@ -53,6 +55,7 @@ export interface NestQueries {
   'reminders.list': { input: Record<string, never>; output: { upcoming: ReminderDto[]; history: ReminderDto[] } };
   'inbox.list': { input: Record<string, never>; output: InboxItemDto[] };
   'inbox.unreadCount': { input: Record<string, never>; output: number };
+  'preferences.get': { input: Record<string, never>; output: PreferencesDto };
 }
 
 export type QueryName = keyof NestQueries;

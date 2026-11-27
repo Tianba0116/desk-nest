@@ -129,6 +129,7 @@ if (!app.requestSingleInstanceLock()) {
       async (request) => {
         try {
           if (request.action === 'save') return { ok: true, settings: models.save(request.input) };
+          if (request.action === 'setStrategy') return { ok: true, settings: models.setStrategy(request.strategy) };
           if (request.action === 'test') {
             const adapter = models.createForTest(request.input, (url, init) => net.fetch(url, init));
             return { ok: true, settings: models.get(), test: await testConnection(adapter) };
@@ -143,12 +144,13 @@ if (!app.requestSingleInstanceLock()) {
     );
     companion = companionHost;
     companionHost.start();
-    const openNest = (view?: 'inbox' | 'reminders' | 'settings'): void => companionHost.open(view);
+    const openNest = (view?: 'inbox' | 'reminders' | 'notes' | 'settings'): void => companionHost.open(view);
 
     // ---------- 对话 ----------
     const chatHost = new ChatHost(appCore.db, appCore.clock, appCore.commands, models, {
       anchor: () => petHost.bounds(),
       openSettings: () => openNest('settings'),
+      openNest: (target) => openNest(target),
     });
     chat = chatHost;
     chatHost.start();

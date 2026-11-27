@@ -13,7 +13,15 @@ import {
   type ReminderDto,
   type ReminderStatus,
 } from '../../shared/contracts/reminders';
-import { CommandError, defineCommand, requireRevision } from '../application/commands';
+import {
+  CommandError,
+  defineCommand,
+  requireRevision,
+  sourceMessageId,
+  type ToolPrepareContext,
+  type ToolPrepareResult,
+} from '../application/commands';
+import { detectRecurrence, formatInZone, resolveTime, TimeSpec } from '../application/time-resolver';
 import { defineQuery } from '../application/queries';
 import type { JobHandler } from '../application/scheduler';
 import type { Database } from '../storage/database';
@@ -95,16 +103,93 @@ const Id = z.string().min(1).max(100);
 const DueAt = z.number().int().positive();
 const TimeZone = z.string().min(1).max(64);
 
+/** 模型看到的参数：时间只填语义结构，由本地换算（TD §8.1） */
+const ReminderToolArgs = z.object({
+  content: z.string().trim().max(REMINDER_CONTENT_MAX).describe('要提醒的事，用用户的原话，例如“改简历”；用户没说就留空'),
+  when: TimeSpec.describe('用户说的时间，只填语义字段，不要自己算日期'),
+  onceOnly: z.boolean().nullish().describe('用户说了重复表达、并同意只设置下一次时填 true'),
+});
+
+function prepareReminder(raw: unknown, ctx: ToolPrepareContext): ToolPrepareResult {
+  const args = raw as z.output<typeof ReminderToolArgs>;
+  // 模型漏填重复表达时，本地规则仍然拦住（R08.AC-7）
+  const recurrence = args.onceOnly ? null : (args.when.recurrence ?? detectRecurrence(ctx.userText));
+  const when = { ...args.when, recurrence };
+  const partial = { ...args, when };
+  if (!args.content) {
+    return { kind: 'needs_input', missing: ['content'], question: '要提醒你做什么呢？', partial };
+  }
+  const input = (dueAt: number): z.input<typeof createReminderInput> => ({
+    content: args.content,
+    dueAt,
+    timeZone: ctx.timeZone,
+    taskId: null,
+  });
+  const flags = args.onceOnly ? { onceOnly: true } : {};
+  const resolution = resolveTime(when, ctx.baseTime, ctx.timeZone);
+  if (resolution.ok) return { kind: 'ready', input: input(resolution.dueAt), flags };
+  switch (resolution.reason) {
+    case 'MISSING_TIME':
+      return { kind: 'needs_input', missing: ['time'], question: `几点提醒你“${args.content}”呢？`, partial };
+    case 'INVALID_DATE':
+      return { kind: 'needs_input', missing: ['date'], question: '这个日期好像不存在，是哪一天呢？', partial };
+    case 'PAST_TIME': {
+      const past = formatInZone(resolution.dueAt, ctx.timeZone);
+      if (resolution.suggestion === null) {
+        return { kind: 'needs_input', missing: ['confirm_past'], question: `${past} 已经过去了，换个以后的时间吧？`, partial };
+      }
+      const next = formatInZone(resolution.suggestion, ctx.timeZone);
+      return {
+        kind: 'needs_input',
+        missing: ['confirm_past'],
+        question: `${past} 已经过去了，要改成 ${next} 吗？`,
+        partial,
+        suggestion: { input: input(resolution.suggestion), label: `改成 ${next}`, flags },
+      };
+    }
+    case 'UNSUPPORTED_RECURRENCE': {
+      const ask = '我现在还不会设置重复提醒。';
+      if (resolution.next === null) {
+        return { kind: 'needs_input', missing: ['confirm_once', 'time'], question: `${ask}要不要只设置下一次？几点呢？`, partial };
+      }
+      const next = formatInZone(resolution.next, ctx.timeZone);
+      return {
+        kind: 'needs_input',
+        missing: ['confirm_once'],
+        question: `${ask}要不要只设置下一次（${next}）？`,
+        partial,
+        suggestion: { input: input(resolution.next), label: `只设置下一次（${next}）`, flags: { onceOnly: true } },
+      };
+    }
+  }
+}
+
+const createReminderInput = z.object({
+  content: z.string().trim().min(1, '提醒内容不能为空').max(REMINDER_CONTENT_MAX),
+  dueAt: DueAt,
+  timeZone: TimeZone,
+  taskId: Id.nullable().default(null),
+});
+
 export const createReminder = defineCommand({
   name: 'reminders.create',
-  input: z.object({
-    content: z.string().trim().min(1, '提醒内容不能为空').max(REMINDER_CONTENT_MAX),
-    dueAt: DueAt,
-    timeZone: TimeZone,
-    taskId: Id.nullable().default(null),
-  }),
+  input: createReminderInput,
   invalidates: ['reminders'],
-  execute({ db, now, newId }, input): ReminderDto {
+  tool: {
+    description:
+      '为用户创建一条一次性提醒。只有用户明确要求“提醒我……”时调用；闲聊里提到的计划不要调用。时间只填 when 的语义字段，系统会换算并在缺信息时向用户确认。',
+    parameters: ReminderToolArgs,
+    prepare: prepareReminder,
+    summarize(result, flags, timeZone) {
+      const r = result as ReminderDto;
+      return `已创建提醒“${r.content}”：${formatInZone(r.dueAt, timeZone)}${flags.onceOnly ? '（仅一次）' : ''}`;
+    },
+    card(db, result) {
+      const row = findReminder(db, (result as ReminderDto).id);
+      return { reminder: row ? toReminderDto(db, row) : null };
+    },
+  },
+  execute({ db, now, newId, meta }, input): ReminderDto {
     requireFuture(input.dueAt, now);
     if (input.taskId) {
       const task = findTask(db, input.taskId);
@@ -113,14 +198,15 @@ export const createReminder = defineCommand({
     const id = newId();
     db.run(
       `INSERT INTO scheduled_actions (id, kind, content, due_at, time_zone, target_type, target_id, status,
-         revision, created_at, updated_at)
-       VALUES (?, 'reminder', ?, ?, ?, ?, ?, 'scheduled', 1, ?, ?)`,
+         revision, source_message_id, created_at, updated_at)
+       VALUES (?, 'reminder', ?, ?, ?, ?, ?, 'scheduled', 1, ?, ?, ?)`,
       id,
       input.content,
       input.dueAt,
       input.timeZone,
       input.taskId ? 'task' : null,
       input.taskId,
+      sourceMessageId(db, meta),
       now,
       now,
     );

@@ -7,13 +7,16 @@ import { z } from 'zod';
 import {
   CHAT_MESSAGE_MAX,
   ChatIpc,
+  type ChatActionRequest,
   type ChatEvent,
   type ChatHistory,
   type ChatStatus,
+  type NestTarget,
 } from '../../shared/contracts/chat';
 import type { CommandResult } from '../../shared/contracts/command';
 import type { CommandService } from '../application/commands';
 import type { Database } from '../storage/database';
+import { actionCards, confirmDraft, dismissDraft } from '../conversation/actions';
 import { chatHistory } from '../conversation/conversation-store';
 import type { FetchLike } from '../conversation/model-adapter';
 import type { ModelSettings } from '../conversation/model-settings';
@@ -24,6 +27,17 @@ import { hardenWebContents } from './web-contents';
 const SIZE = { width: 380, height: 540 };
 const SendArgs = z.tuple([z.string().max(CHAT_MESSAGE_MAX + 100), z.string().min(8).max(100)]);
 const RetryArgs = z.tuple([z.string().max(100), z.string().min(8).max(100)]);
+const Id = z.string().min(1).max(100);
+const ActionArgs = z.tuple([
+  z.discriminatedUnion('action', [
+    z.object({ action: z.literal('confirmDraft'), draftId: Id }),
+    z.object({ action: z.literal('dismissDraft'), draftId: Id }),
+    z.object({ action: z.literal('rescheduleReminder'), id: Id, revision: z.number().int().positive(), dueAt: z.number().int().positive() }),
+    z.object({ action: z.literal('cancelReminder'), id: Id, revision: z.number().int().positive() }),
+  ]),
+  z.string().min(8).max(100),
+]);
+const NestTargetArg = z.enum(['notes', 'reminders', 'settings']);
 
 /** Electron 的 net.fetch 走 Chromium 网络栈，跟随系统代理设置 */
 const electronFetch: FetchLike = (url, init) => net.fetch(url, init);
@@ -32,6 +46,7 @@ export interface ChatHooks {
   /** 宠物位置；对话窗口放在它旁边 */
   anchor(): Rectangle | null;
   openSettings(): void;
+  openNest(target: NestTarget): void;
 }
 
 export class ChatHost {
@@ -44,18 +59,29 @@ export class ChatHost {
 
   constructor(
     private readonly db: Database,
-    clock: Clock,
+    private readonly clock: Clock,
     private readonly commands: CommandService,
     private readonly models: ModelSettings,
     private readonly hooks: ChatHooks,
   ) {
-    this.runner = new ConversationRunner(db, clock, {
-      onLive: (turn) => this.emit({ type: 'live', turn }),
-      onEnded: (turnId, errorCode) => {
-        this.emit({ type: 'ended', turnId, errorCode });
-        this.notifyChanged();
+    this.runner = new ConversationRunner(
+      db,
+      clock,
+      {
+        onLive: (turn) => this.emit({ type: 'live', turn }),
+        onEnded: (turnId, errorCode) => {
+          this.emit({ type: 'ended', turnId, errorCode });
+          this.notifyChanged();
+        },
+        onToolsRejected: () => {
+          const built = this.models.createAdapter(electronFetch);
+          if (built) this.models.markToolsRejected(built.configKey);
+        },
       },
-    });
+      undefined,
+      undefined,
+      commands,
+    );
   }
 
   start(): void {
@@ -64,7 +90,18 @@ export class ChatHost {
     };
     app.on('before-quit', onBeforeQuit);
     this.disposers.push(() => app.removeListener('before-quit', onBeforeQuit));
-    this.handle(ChatIpc.history, (): ChatHistory => ({ messages: chatHistory(this.db), live: this.runner.liveTurn }));
+    this.handle(ChatIpc.history, (): ChatHistory => this.history());
+    this.handle(ChatIpc.action, (_event, ...args) => {
+      const [request, operationId] = ActionArgs.parse(args);
+      return this.action(request, operationId);
+    });
+    this.on(ChatIpc.openNest, (_event, ...args) => this.hooks.openNest(NestTargetArg.parse(args[0])));
+    // 别处（小窝、气泡）改了提醒或笔记：卡片按当前状态重新渲染
+    this.disposers.push(
+      this.commands.onCommitted((topics) => {
+        if (topics.some((t) => t === 'reminders' || t === 'notes' || t === 'settings')) this.notifyChanged();
+      }),
+    );
     this.handle(ChatIpc.status, (): ChatStatus => this.status());
     this.handle(ChatIpc.send, (_event, ...args) => {
       const [text, operationId] = SendArgs.parse(args);
@@ -105,9 +142,49 @@ export class ChatHost {
     for (const dispose of this.disposers.splice(0)) dispose();
   }
 
+  private history(): ChatHistory {
+    const messages = chatHistory(this.db);
+    const turnIds = [...new Set(messages.flatMap((m) => (m.turnId ? [m.turnId] : [])))];
+    const live = this.runner.liveTurn;
+    if (live && !turnIds.includes(live.turnId)) turnIds.push(live.turnId);
+    return { messages, live, cards: actionCards(this.db, this.commands, turnIds, this.clock.now()) };
+  }
+
   private status(): ChatStatus {
     const built = this.models.createAdapter(electronFetch);
-    return { configured: !!built, modelLabel: built?.label ?? null, toolCalls: false };
+    return {
+      configured: !!built,
+      modelLabel: built?.label ?? null,
+      toolCalls: !!built && built.adapter.capabilities.toolCalls && !this.models.isToolsRejected(built.configKey),
+    };
+  }
+
+  private runOptions(configKey: string): { strategy: ReturnType<ModelSettings['strategy']>; tools: boolean } {
+    return { strategy: this.models.strategy(), tools: !this.models.isToolsRejected(configKey) };
+  }
+
+  /** 卡片按钮：全部走统一命令入口，来源是 UI */
+  private action(request: ChatActionRequest, operationId: string): CommandResult {
+    const now = this.clock.now();
+    let result: CommandResult;
+    switch (request.action) {
+      case 'confirmDraft':
+        result = confirmDraft(this.db, this.commands, request.draftId, now);
+        break;
+      case 'dismissDraft':
+        result = dismissDraft(this.db, request.draftId, now)
+          ? { ok: true, operationId, result: null, replayed: false }
+          : { ok: false, operationId, errorCode: 'INVALID_STATE' };
+        break;
+      case 'rescheduleReminder':
+        result = this.commands.run('reminders.reschedule', { id: request.id, revision: request.revision, dueAt: request.dueAt }, { operationId, origin: 'ui' });
+        break;
+      case 'cancelReminder':
+        result = this.commands.run('reminders.cancel', { id: request.id, revision: request.revision }, { operationId, origin: 'ui' });
+        break;
+    }
+    this.notifyChanged();
+    return result;
   }
 
   private send(text: string, operationId: string): CommandResult {
@@ -121,7 +198,7 @@ export class ChatHost {
     );
     if (result.ok) {
       this.notifyChanged();
-      if (!result.replayed) void this.runner.run(result.result.turnId, built.adapter);
+      if (!result.replayed) void this.runner.run(result.result.turnId, built.adapter, this.runOptions(built.configKey));
     }
     return result;
   }
@@ -136,7 +213,7 @@ export class ChatHost {
     );
     if (result.ok) {
       this.notifyChanged();
-      if (!result.replayed) void this.runner.run(result.result.turnId, built.adapter);
+      if (!result.replayed) void this.runner.run(result.result.turnId, built.adapter, this.runOptions(built.configKey));
     }
     return result;
   }
@@ -231,9 +308,14 @@ export class ChatHost {
     this.disposers.push(() => ipcMain.removeHandler(channel));
   }
 
-  private on(channel: string, handler: (event: IpcMainEvent) => void): void {
-    const wrapped = (event: IpcMainEvent): void => {
-      if (this.isSender(event.sender)) handler(event);
+  private on(channel: string, handler: (event: IpcMainEvent, ...args: unknown[]) => void): void {
+    const wrapped = (event: IpcMainEvent, ...args: unknown[]): void => {
+      if (!this.isSender(event.sender)) return;
+      try {
+        handler(event, ...args);
+      } catch (error) {
+        console.warn(`[chat] ${channel} rejected:`, error instanceof Error ? error.name : 'unknown');
+      }
     };
     ipcMain.on(channel, wrapped);
     this.disposers.push(() => ipcMain.removeListener(channel, wrapped));

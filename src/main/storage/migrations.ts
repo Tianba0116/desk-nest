@@ -130,4 +130,48 @@ export const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX messages_conversation ON messages (conversation_id, created_at);
     `,
   },
+  {
+    version: 4,
+    name: 'M6：显式偏好、模型动作账本',
+    sql: `
+      -- 显式偏好（R10）：用户直接设置或在对话中明确说出的值
+      CREATE TABLE preferences (
+        key TEXT PRIMARY KEY,
+        value_json TEXT NOT NULL,
+        source_message_id TEXT,
+        revision INTEGER NOT NULL DEFAULT 1,
+        updated_at INTEGER NOT NULL
+      );
+
+      -- 模型动作账本（TD §5.2、§6.3）：先记录再执行；重试和重启时据此恢复，不重新执行
+      CREATE TABLE turn_actions (
+        operation_id TEXT PRIMARY KEY,
+        turn_id TEXT NOT NULL,
+        user_message_id TEXT NOT NULL,
+        ordinal INTEGER NOT NULL,
+        kind TEXT NOT NULL,
+        args_json TEXT NOT NULL,
+        args_hash TEXT,
+        state TEXT NOT NULL CHECK (state IN ('awaiting_input', 'ready', 'committed', 'failed', 'cancelled', 'resolved')),
+        missing_json TEXT,
+        question TEXT,
+        suggestion_json TEXT,
+        error_code TEXT,
+        error_detail TEXT,
+        result_json TEXT,
+        resolved_by TEXT,
+        expires_at INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE INDEX turn_actions_turn ON turn_actions (turn_id, ordinal);
+      CREATE INDEX turn_actions_message ON turn_actions (user_message_id, state);
+      CREATE INDEX turn_actions_state ON turn_actions (state);
+
+      -- 对比流式方案用的计时与计数（D-06）
+      ALTER TABLE turns ADD COLUMN strategy TEXT;
+      ALTER TABLE turns ADD COLUMN metrics_json TEXT;
+      ALTER TABLE notes ADD COLUMN source_message_id TEXT;
+    `,
+  },
 ];

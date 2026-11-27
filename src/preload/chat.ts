@@ -10,6 +10,8 @@ const chat: ChatBridge = {
   stop: () => ipcRenderer.send(ChatIpc.stop),
   status: () => ipcRenderer.invoke(ChatIpc.status),
   openSettings: () => ipcRenderer.send(ChatIpc.openSettings),
+  openNest: (target) => ipcRenderer.send(ChatIpc.openNest, target),
+  action: (request, operationId) => ipcRenderer.invoke(ChatIpc.action, request, operationId),
   hide: () => ipcRenderer.send(ChatIpc.hide),
   onEvent: (listener) => {
     const handler = (_event: IpcRendererEvent, payload: ChatEvent): void => listener(payload);

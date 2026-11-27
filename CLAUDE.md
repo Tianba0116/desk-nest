@@ -1,6 +1,6 @@
 # 桌面陪伴宠物 — 开发约定
 
-当前阶段：**M1～M5** 已实现，等待实机验证（`docs/verification/M1.md`～`M5.md`）；M5 尚未用真实模型服务测试。下一步是 M6（用一句话操作），范围已在 `docs/04-roadmap.md` 定稿（2026-11-27），可以开工。按 `docs/04-roadmap.md` 的里程碑逐版推进。
+当前阶段：**M1～M6** 已实现，等待实机验证（`docs/verification/M1.md`～`M6.md`）；M5、M6 尚未用真实模型服务测试（M6 的真实服务评估：`tests/eval/live.test.ts`，D-06 待关闭）。下一步是 M7（记住近况与约定跟进），开工前先在 `docs/04-roadmap.md` 展开范围。按 `docs/04-roadmap.md` 的里程碑逐版推进。
 
 ## 文档入口（以这些为准）
 
@@ -31,5 +31,6 @@
 - `npm test`：运行 Vitest 单元测试（`tests/**/*.test.ts`）。
 - `npm run build`：构建到 `out/`。
 - `npm run package`：构建，然后打包 Windows 解压版和 zip，输出到 `release/<版本>/`。
+- `node scripts/mock-model-server.mjs`：本地模拟模型服务（`http://127.0.0.1:18081/v1`，按固定规则调用工具），不花钱地自测对话和一句话操作；不能代替真实服务评估。设置 `PET_USER_DATA_DIR` 可让测试实例使用独立的数据目录。
 
 依赖用 npm 管理，版本写精确值（不用 `^`）。

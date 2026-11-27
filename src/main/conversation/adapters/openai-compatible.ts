@@ -1,5 +1,6 @@
 // OpenAI 兼容协议（/chat/completions + SSE）。DeepSeek、通义千问、Kimi、智谱、Ollama 等都提供这个接口。
-// 只实现 M5 需要的流式文字；工具调用在 M6 实测后再开启（capabilities.toolCalls = false）。
+// 流式文字 + 工具调用（tools / delta.tool_calls）。对话历史只用 system/user/assistant 三种角色，
+// 本地执行结果以系统消息告诉模型，不依赖各家对 tool 角色消息的兼容程度。
 
 import { z } from 'zod';
 import type { ModelErrorCode } from '../../../shared/contracts/chat';
@@ -37,13 +38,20 @@ export function splitSse(buffer: string): { events: string[]; rest: string } {
   return { events, rest };
 }
 
+interface ToolCallDelta {
+  index?: number;
+  id?: string;
+  function?: { name?: string; arguments?: string };
+}
+
 interface ChunkShape {
-  choices?: Array<{ delta?: { content?: string | null }; finish_reason?: string | null }>;
+  choices?: Array<{ delta?: { content?: string | null; tool_calls?: ToolCallDelta[] | null }; finish_reason?: string | null }>;
   error?: { message?: string };
 }
 
 export class OpenAICompatibleAdapter implements ModelAdapter {
-  readonly capabilities = { streaming: true, toolCalls: false, structuredOutput: false };
+  // 协议支持工具调用；具体服务或模型不支持时会返回 HTTP 400，由对话执行器降级为只聊天
+  readonly capabilities = { streaming: true, toolCalls: true, structuredOutput: false };
 
   constructor(
     private readonly config: z.output<typeof OpenAICompatibleConfig>,
@@ -87,6 +95,15 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
             stream: true,
             ...(request.maxTokens ? { max_tokens: request.maxTokens } : {}),
             ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
+            ...(request.tools?.length
+              ? {
+                  tools: request.tools.map((t) => ({
+                    type: 'function',
+                    function: { name: t.name, description: t.description, parameters: t.parameters },
+                  })),
+                  tool_choice: 'auto',
+                }
+              : {}),
           }),
           signal: controller.signal,
         });
@@ -113,6 +130,12 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
       let buffer = '';
       let finish: 'stop' | 'length' | 'tool_calls' | null = null;
       let sawData = false;
+      // 工具调用按 index 分段到达；id 只在第一段出现
+      const callIds = new Map<number, string>();
+      const endCalls = function* (): Generator<ModelEvent> {
+        for (const callId of callIds.values()) yield { type: 'tool_end', callId };
+        callIds.clear();
+      };
       while (true) {
         let chunk: Awaited<ReturnType<typeof reader.read>>;
         try {
@@ -128,6 +151,7 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
         buffer = rest;
         for (const data of events) {
           if (data === '[DONE]') {
+            yield* endCalls();
             yield { type: 'end', reason: finish ?? 'stop' };
             return;
           }
@@ -145,10 +169,26 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
           const choice = parsed.choices?.[0];
           const text = choice?.delta?.content;
           if (text) yield { type: 'text_delta', text };
+          for (const call of choice?.delta?.tool_calls ?? []) {
+            const index = call.index ?? 0;
+            let callId = callIds.get(index);
+            if (!callId) {
+              callId = call.id || `call-${index}`;
+              callIds.set(index, callId);
+            }
+            const name = call.function?.name;
+            yield {
+              type: 'tool_delta',
+              callId,
+              ...(name ? { name } : {}),
+              argumentsDelta: call.function?.arguments ?? '',
+            };
+          }
           const reason = choice?.finish_reason;
           if (reason === 'stop' || reason === 'length' || reason === 'tool_calls') finish = reason;
         }
       }
+      yield* endCalls();
       if (finish) yield { type: 'end', reason: finish };
       else yield fail(sawData ? 'NETWORK' : 'BAD_RESPONSE', sawData, sawData ? '回复没有正常结束' : '不是流式响应');
     } finally {

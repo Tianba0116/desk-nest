@@ -6,6 +6,7 @@ import { CHAT_MESSAGE_MAX, type ChatMessageDto, type MessageStatus, type ModelEr
 import { CommandErrorCodes } from '../../shared/contracts/command';
 import { CommandError, defineCommand } from '../application/commands';
 import type { Database } from '../storage/database';
+import { reconcileReadyActions } from './actions';
 
 export const DEFAULT_CONVERSATION = 'default';
 /** 模型只携带有限的近期历史（R05.AC-6） */
@@ -31,7 +32,7 @@ export interface TurnRow {
 }
 
 function toDto(row: MessageRow): ChatMessageDto {
-  return { id: row.id, role: row.role, content: row.content, status: row.status, createdAt: row.created_at };
+  return { id: row.id, role: row.role, content: row.content, status: row.status, turnId: row.turn_id, createdAt: row.created_at };
 }
 
 function activeTurn(db: Database, conversationId: string): TurnRow | undefined {
@@ -119,6 +120,10 @@ export function loadTurn(db: Database, turnId: string): TurnRow | undefined {
   return db.get<TurnRow>('SELECT * FROM turns WHERE id = ?', turnId);
 }
 
+export function loadMessage(db: Database, id: string): { id: string; content: string; created_at: number } | undefined {
+  return db.get('SELECT id, content, created_at FROM messages WHERE id = ?', id);
+}
+
 export function markResponding(db: Database, turnId: string): void {
   db.run(`UPDATE turns SET state = 'responding' WHERE id = ? AND state = 'requesting'`, turnId);
 }
@@ -128,16 +133,48 @@ export type TurnOutcome =
   | { kind: 'cancelled'; text: string }
   | { kind: 'failed'; text: string; errorCode: ModelErrorCode };
 
-export function finishTurn(db: Database, turnId: string, outcome: TurnOutcome, now: number, newId: () => string): void {
+/** 对比流式方案用的计时与计数（D-06）；只存本机 */
+export interface TurnMetrics {
+  strategy: string;
+  /** 本轮模型请求次数 */
+  requests: number;
+  /** 从开始请求到界面出现第一个字（毫秒）；没有显示文字时为 null */
+  firstVisibleMs: number | null;
+  totalMs: number;
+  toolCalls: number;
+  /** 单次流式 + 撤回：是否收起过已显示的文字，收起前显示了多少字、是否包含成功声明 */
+  retracted: boolean;
+  retractedChars: number;
+  retractedClaim: boolean;
+  /** 发送和收到的字符数（服务没有统一返回 token 用量，用字符数近似） */
+  promptChars: number;
+  outputChars: number;
+  repaired: boolean;
+  /** 操作已执行、但表达阶段失败：用本地文字收尾 */
+  expressFailed: boolean;
+  /** 服务拒绝了带工具的请求，本轮改为只聊天 */
+  toolsRejected: boolean;
+}
+
+export function finishTurn(
+  db: Database,
+  turnId: string,
+  outcome: TurnOutcome,
+  now: number,
+  newId: () => string,
+  metrics?: TurnMetrics,
+): void {
   db.transaction(() => {
     const turn = loadTurn(db, turnId);
     if (!turn || (turn.state !== 'requesting' && turn.state !== 'responding')) return;
     const state = outcome.kind;
     db.run(
-      `UPDATE turns SET state = ?, error_code = ?, ended_at = ? WHERE id = ?`,
+      `UPDATE turns SET state = ?, error_code = ?, ended_at = ?, strategy = ?, metrics_json = ? WHERE id = ?`,
       state,
       outcome.kind === 'failed' ? outcome.errorCode : null,
       now,
+      metrics?.strategy ?? null,
+      metrics ? JSON.stringify(metrics) : null,
       turnId,
     );
     if (outcome.text) {
@@ -162,6 +199,8 @@ export function finishTurn(db: Database, turnId: string, outcome: TurnOutcome, n
 
 /** 启动时：上次运行中未完成的轮次标为中断，不自动重发（TD §7.4） */
 export function interruptUnfinishedTurns(db: Database, now: number): number {
+  // 先按收据恢复执行到一半的模型操作，已提交的保留为结果卡片
+  reconcileReadyActions(db, now);
   return db.transaction(() => {
     const rows = db.all<TurnRow>(`SELECT * FROM turns WHERE state IN ('requesting', 'responding')`);
     for (const row of rows) {

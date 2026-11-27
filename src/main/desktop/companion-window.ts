@@ -41,6 +41,7 @@ const ModelRequestSchema: z.ZodType<ModelRequest> = z.discriminatedUnion('action
   z.object({ action: z.literal('get') }),
   z.object({ action: z.literal('save'), input: ModelInputSchema }),
   z.object({ action: z.literal('test'), input: ModelInputSchema }),
+  z.object({ action: z.literal('setStrategy'), strategy: z.enum(['two_phase', 'stream_retract']) }),
 ]);
 
 const DEFAULT_SIZE = { width: 820, height: 600 };

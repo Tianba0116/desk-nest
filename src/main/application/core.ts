@@ -6,6 +6,7 @@ import { chatCommands } from '../conversation/conversation-store';
 import { notebookQueries } from '../domains/notebook-queries';
 import { noteCommands, purgeExpiredNotes } from '../domains/notes';
 import { reminderCommands, reminderQueries } from '../domains/reminders';
+import { preferenceCommands, preferenceQueries } from '../domains/preferences';
 import { purgeExpiredTasks, taskCommands } from '../domains/tasks';
 import { AppSettings } from '../storage/app-settings';
 import { Database } from '../storage/database';
@@ -33,10 +34,10 @@ export function openDatabase(dataDir: string, clock: Clock = systemClock): Datab
 
 export function createAppCore(db: Database, clock: Clock = systemClock, newId?: () => string): AppCore {
   const commands = new CommandService(db, clock, newId);
-  commands.register(...noteCommands, ...taskCommands, ...reminderCommands, ...chatCommands);
+  commands.register(...noteCommands, ...taskCommands, ...reminderCommands, ...preferenceCommands, ...chatCommands);
 
   const queries = new QueryService(db, clock);
-  queries.register(...notebookQueries, ...reminderQueries);
+  queries.register(...notebookQueries, ...reminderQueries, ...preferenceQueries);
 
   return {
     db,

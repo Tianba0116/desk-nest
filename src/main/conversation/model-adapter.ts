@@ -16,8 +16,18 @@ export interface ModelMessage {
   content: string;
 }
 
+/** 开放给模型的工具（由命令注册表生成，TD §6.1） */
+export interface ModelTool {
+  name: string;
+  description: string;
+  /** JSON Schema */
+  parameters: Record<string, unknown>;
+}
+
 export interface ModelRequest {
   messages: ModelMessage[];
+  /** 有值时允许模型调用这些工具；适配器的 capabilities.toolCalls 为 false 时不能传 */
+  tools?: ModelTool[];
   maxTokens?: number;
   temperature?: number;
 }
