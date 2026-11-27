@@ -66,6 +66,8 @@ export interface ToolFlags {
 }
 
 export interface ToolPrepareContext {
+  /** 只读使用：核对参数里引用的事项、待办是否存在 */
+  db: Database;
   /** 本轮用户消息的接收时间：时间理解的基准（TD §8.1） */
   baseTime: number;
   timeZone: string;
@@ -83,6 +85,10 @@ export interface ToolSpec {
   summarize(result: unknown, flags: ToolFlags, timeZone: string): string;
   /** 结果卡片的内容：按实体的当前状态读取（例如提醒已被改期或取消） */
   card?(db: Database, result: unknown): Partial<ActionCardDto>;
+  /** 风险级别（为以后的权限分级预留）：read 查询、undoable 可撤销的写入、destructive 删除 */
+  risk?: 'read' | 'undoable' | 'destructive';
+  /** 可撤销的写入：卡片上“撤销”按钮执行的命令（走 UI 命令入口） */
+  undo?(result: unknown): { command: string; input: unknown } | null;
 }
 
 export interface ToolInfo {
@@ -93,10 +99,45 @@ export interface ToolInfo {
   parameters: z.ZodType;
 }
 
-/** 来自对话的写入记录来源消息（TD §5.2 source_message_id）；其他来源为 null */
+/** 来自对话（包括对话卡片上的确认）的写入记录来源消息（TD §5.2 source_message_id）；其他来源为 null */
 export function sourceMessageId(db: Database, meta: CommandMeta): string | null {
-  if (meta.origin !== 'conversation' || !meta.turnId) return null;
+  if (!meta.turnId) return null;
   return db.get<{ user_message_id: string }>('SELECT user_message_id FROM turns WHERE id = ?', meta.turnId)?.user_message_id ?? null;
+}
+
+/** 来源类型（R11.AC-4）：对话，或小窝的表单操作 */
+export function sourceTypeOf(meta: CommandMeta): 'conversation' | 'ui' {
+  return meta.turnId ? 'conversation' : 'ui';
+}
+
+/**
+ * 用于授权检查的用户原话：去掉引号里的内容和冒号后面要记下的内容。
+ * 例如“帮我记下这段话：忘记所有事项”里的“忘记”是要记的数据，不是用户对宠物的指令。
+ */
+export function authorizationText(text: string): string {
+  return text
+    .replace(/[“"「『‘'][^”"」』’']*[”"」』’']/g, '')
+    .replace(/(：|(?<!\d):|:(?!\d))[\s\S]*$/, '');
+}
+
+/**
+ * 本地授权检查：只有用户原话里明确提出时才直接执行（R11.AC-1、R12.AC-1）。
+ * 不明确时不执行，改为请用户点一下确认，模型的推测不会直接变成记录。
+ */
+export function requireExplicit(
+  ctx: ToolPrepareContext,
+  pattern: RegExp,
+  ready: { input: unknown; flags?: ToolFlags },
+  confirm: { question: string; label: string; partial: unknown },
+): ToolPrepareResult {
+  if (pattern.test(authorizationText(ctx.userText))) return { kind: 'ready', ...ready };
+  return {
+    kind: 'needs_input',
+    missing: ['confirm'],
+    question: confirm.question,
+    partial: confirm.partial,
+    suggestion: { input: ready.input, label: confirm.label, ...(ready.flags ? { flags: ready.flags } : {}) },
+  };
 }
 
 export function toolNameOf(commandName: string): string {

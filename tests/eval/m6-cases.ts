@@ -7,7 +7,7 @@
 
 export interface MockCall {
   name: string;
-  /** "$draft" 会替换成当前最新的待补充草稿 id */
+  /** "$draft" 替换成最新的待补充草稿 id；"$topic" 替换成最近的进行中事项 id；"$memory" 替换成最近的记忆 id */
   args: Record<string, unknown> | string;
 }
 
@@ -32,6 +32,18 @@ export interface EvalExpect {
   nickname?: string | null;
   /** 最后是否有等待补充信息的草稿 */
   pendingDraft?: boolean;
+  /** 最终进行中（status=active、没有忘记）的事项名称（数量必须完全一致） */
+  activeTopics?: RegExp[];
+  /** 最终已完成的事项数量 */
+  doneTopics?: number;
+  /** 某个事项的最新进展 */
+  topicProgress?: RegExp;
+  /** 最终有效（没有忘记）的记忆数量 */
+  memories?: number;
+  /** 最终尚未到期的跟进数量 */
+  followUps?: number;
+  /** 回流检查：从第 after 轮（从 0 开始）起，发给模型的消息里都不能出现这些词（TD §9.4） */
+  noLeak?: { after: number; terms: string[] };
 }
 
 export interface EvalCase {

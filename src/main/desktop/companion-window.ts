@@ -60,6 +60,7 @@ export class CompanionHost {
     private readonly queries: QueryService,
     private readonly system: SystemActions,
     private readonly model: ModelActions,
+    private readonly followUp: (inboxId: string) => void = () => undefined,
   ) {}
 
   start(): void {
@@ -87,6 +88,7 @@ export class CompanionHost {
 
     this.handle(NestIpc.system, (_event, request) => this.system(SystemRequestSchema.parse(request)));
     this.handle(NestIpc.model, (_event, request) => this.model(ModelRequestSchema.parse(request)));
+    this.handle(NestIpc.followUp, (_event, inboxId) => this.followUp(z.string().min(1).max(100).parse(inboxId)));
 
     this.disposers.push(this.commands.onCommitted((topics) => this.broadcast(topics)));
   }

@@ -26,9 +26,20 @@ async function runAction(request: ChatActionRequest): Promise<CommandResult> {
 
 const TITLE: Record<string, string> = {
   'reminders.create': '提醒',
+  'followUps.create': '约定跟进',
   'notes.create': '随手记',
   'preferences.setNickname': '称呼',
+  'preferences.setStyle': '说话方式',
+  'topics.create': '事项',
+  'topics.recordProgress': '事项进展',
+  'topics.setStatus': '事项',
+  'topics.forget': '忘记事项',
+  'memories.create': '记忆',
+  'memories.forget': '忘记',
 };
+
+const STYLE_TEXT: Record<string, string> = { brief: '简短', lively: '活泼', gentle: '温柔' };
+const TOPIC_STATUS: Record<string, string> = { active: '进行中', done: '已完成', archived: '已归档' };
 
 export function ActionCard({ card }: { card: ActionCardDto }) {
   const [editing, setEditing] = useState(false);
@@ -52,6 +63,14 @@ export function ActionCard({ card }: { card: ActionCardDto }) {
   };
 
   const title = TITLE[card.kind] ?? '操作';
+
+  /** 可撤销的操作：卡片上的“撤销”走 UI 命令入口 */
+  const undo = card.canUndo ? (
+    <button type="button" disabled={busy} onClick={() => void act({ action: 'undo', operationId: card.operationId })}>
+      撤销
+    </button>
+  ) : null;
+  const undone = card.undone ? <span className="tag">已撤销</span> : null;
 
   if (card.state === 'resolved') {
     return <div className="action-card compact">{title}：已补充信息，见下方</div>;
@@ -92,19 +111,34 @@ export function ActionCard({ card }: { card: ActionCardDto }) {
   }
 
   // 已执行
-  if (card.kind === 'reminders.create') {
+  if (card.kind === 'reminders.create' || card.kind === 'followUps.create') {
     const r = card.reminder;
-    if (!r) return <div className="action-card compact">提醒：记录已不存在</div>;
+    if (!r) return <div className="action-card compact">{title}：记录已不存在</div>;
+    const follow = r.kind === 'follow_up';
     const status =
-      r.status === 'cancelled' ? '已取消' : r.status === 'materialized' ? '已提醒' : r.revision > 1 ? '已改期' : '已创建';
+      r.status === 'cancelled'
+        ? r.cancelReason?.startsWith('target_')
+          ? '已自动取消'
+          : '已取消'
+        : r.status === 'materialized'
+          ? follow
+            ? '已来问过'
+            : '已提醒'
+          : r.revision > 1
+            ? '已改期'
+            : follow
+              ? '已约好'
+              : '已创建';
     return (
       <div className={`action-card done${r.status === 'cancelled' ? ' stale' : ''}`} role="status">
         <div className="card-title">
-          提醒 · {status}
+          {follow ? '约定跟进' : '提醒'} · {status}
           {card.onceOnly && <span className="tag">仅一次</span>}
         </div>
-        <p className="card-main">{r.content}</p>
+        <p className="card-main">{follow ? `到时候来问：${r.content}` : r.content}</p>
         <p className="card-time">{formatFullDateTime(r.dueAt)}</p>
+        {r.topic && <p className="card-sub">事项：{r.topic.title}</p>}
+        {follow && r.stopPolicy === 'none' && <p className="card-sub">完成后也会来问（复盘）</p>}
         {r.status === 'scheduled' && !editing && (
           <div className="card-actions">
             <button
@@ -123,7 +157,7 @@ export function ActionCard({ card }: { card: ActionCardDto }) {
               disabled={busy}
               onClick={() => void act({ action: 'cancelReminder', id: r.id, revision: r.revision })}
             >
-              取消提醒
+              {follow ? '取消跟进' : '取消提醒'}
             </button>
           </div>
         )}
@@ -166,6 +200,80 @@ export function ActionCard({ card }: { card: ActionCardDto }) {
             </button>
           </div>
         )}
+      </div>
+    );
+  }
+
+  if (card.kind.startsWith('topics.')) {
+    const t = card.topic;
+    if (!t) return <div className="action-card compact">{title}：记录已删除</div>;
+    const forgotten = t.forgottenAt !== null;
+    const head =
+      card.kind === 'topics.create'
+        ? '已记住'
+        : card.kind === 'topics.recordProgress'
+          ? '已记下进展'
+          : card.kind === 'topics.forget'
+            ? '已忘记'
+            : `已标为${TOPIC_STATUS[t.status] ?? ''}`;
+    return (
+      <div className={`action-card done${forgotten && card.kind !== 'topics.forget' ? ' stale' : ''}`} role="status">
+        <div className="card-title">
+          {title} · {head}
+          {undone}
+          {forgotten && card.kind !== 'topics.forget' && <span className="tag">已忘记</span>}
+        </div>
+        <p className="card-main">{t.title}</p>
+        {t.progressNote && !forgotten && <p className="card-sub">最新进展：{t.progressNote}</p>}
+        {card.kind === 'topics.forget' && !card.undone && <p className="card-sub">之后不会再提起；可以在小窝里恢复</p>}
+        {card.kind === 'topics.setStatus' && !card.undone && t.status !== 'active' && (
+          <p className="card-sub">未到期的跟进已自动取消</p>
+        )}
+        <div className="card-actions">
+          {undo}
+          <button type="button" onClick={() => window.chat.openNest('topics')}>
+            在小窝查看
+          </button>
+        </div>
+        {error && <p className="card-error">{error}</p>}
+      </div>
+    );
+  }
+
+  if (card.kind.startsWith('memories.')) {
+    const m = card.memory;
+    if (!m) return <div className="action-card compact">{title}：记录已删除</div>;
+    const forgotten = m.forgottenAt !== null;
+    return (
+      <div className={`action-card done${forgotten && card.kind === 'memories.create' ? ' stale' : ''}`} role="status">
+        <div className="card-title">
+          {card.kind === 'memories.forget' ? '已忘记' : '记忆 · 已记住'}
+          {undone}
+          {forgotten && card.kind === 'memories.create' && <span className="tag">已忘记</span>}
+        </div>
+        <p className="card-main">{m.content}</p>
+        {m.expiresAt !== null && <p className="card-sub">有效到 {formatFullDateTime(m.expiresAt - 1)}</p>}
+        <div className="card-actions">
+          {undo}
+          <button type="button" onClick={() => window.chat.openNest('settings')}>
+            在小窝查看
+          </button>
+        </div>
+        {error && <p className="card-error">{error}</p>}
+      </div>
+    );
+  }
+
+  if (card.kind === 'preferences.setStyle') {
+    return (
+      <div className="action-card done" role="status">
+        <div className="card-title">说话方式 · 已设置</div>
+        <p className="card-main">{card.style ? `之后说话${STYLE_TEXT[card.style] ?? ''}一些` : '恢复默认'}</p>
+        <div className="card-actions">
+          <button type="button" onClick={() => window.chat.openNest('settings')}>
+            修改
+          </button>
+        </div>
       </div>
     );
   }

@@ -5,6 +5,8 @@ import type { RecycledItem, SearchHit } from '../../shared/contracts/notebook';
 import { defineQuery } from '../application/queries';
 import { listDeletedNotes, listNotes, searchNotes } from './notes';
 import { listDeletedTasks, listTasks, searchTasks } from './tasks';
+import { likeConditions, searchTerms } from './text-search';
+import { searchTopics } from './topics';
 
 const Empty = z.object({}).strict();
 
@@ -15,6 +17,9 @@ export const notebookQueries = [
     name: 'notebook.search',
     input: z.object({ query: z.string().max(200) }),
     run: ({ db }, input): SearchHit[] => [
+      ...(searchTerms(input.query).length
+        ? searchTopics(db, likeConditions('search_text', searchTerms(input.query))).map((item) => ({ type: 'topic' as const, item }))
+        : []),
       ...searchTasks(db, input.query).map((item) => ({ type: 'task' as const, item })),
       ...searchNotes(db, input.query).map((item) => ({ type: 'note' as const, item })),
     ],

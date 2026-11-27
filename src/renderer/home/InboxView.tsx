@@ -13,7 +13,7 @@ export function InboxView() {
       <header className="view-header with-action">
         <div>
           <h1 id="inbox-title">信箱</h1>
-          <p className="view-hint">到期的提醒都会留在这里；关闭气泡不会删除，也不会完成待办。</p>
+          <p className="view-hint">到期的提醒和约好的跟进都会留在这里；关闭气泡不会删除，也不会完成待办。</p>
         </div>
         {unread > 0 && (
           <button type="button" disabled={busy} onClick={() => void run('inbox.markAllRead', {})}>
@@ -33,6 +33,58 @@ function InboxCard({ item }: { item: InboxItemDto }) {
   const { busy, run } = useAction();
   const r = item.reminder;
   const unread = item.status === 'unread';
+
+  // 跟进因对象完成或删除而自动取消的说明（R12.AC-5）
+  if (item.category === 'auto_cancelled') {
+    return (
+      <li className={`card inbox-card${unread ? ' is-unread' : ''}`} aria-label={`${unread ? '未读' : '已读'}：跟进已自动取消`}>
+        <div className="inbox-head">
+          {unread && <span className="unread-dot" aria-hidden="true" />}
+          <span className="badge">💬 跟进已自动取消</span>
+        </div>
+        <p>{item.text}</p>
+        {unread && (
+          <div className="card-actions spaced">
+            <button type="button" disabled={busy} onClick={() => void run('inbox.markRead', { ids: [item.id] })}>
+              知道了
+            </button>
+          </div>
+        )}
+      </li>
+    );
+  }
+
+  // 跟进到期：按对象的最新状态发问（R12.AC-4）
+  if (item.category === 'follow_up') {
+    const live = !item.stale && r?.status === 'materialized';
+    return (
+      <li className={`card inbox-card${unread ? ' is-unread' : ''}`} aria-label={`${unread ? '未读' : '已读'}跟进：${r?.content ?? ''}`}>
+        <div className="inbox-head">
+          {unread && <span className="unread-dot" aria-hidden="true" />}
+          <span className="badge">💬 约好的跟进</span>
+          <h3 className="card-title-inline">{r?.content ?? '（已删除）'}</h3>
+        </div>
+        {live && <p>{item.text}</p>}
+        <p className="meta">
+          {item.dueAt !== null && <span>{formatTime(item.dueAt)} 到期</span>}
+          {r?.topic && <span>事项：{r.topic.title}</span>}
+          {!live && r && <span>{r.status === 'cancelled' ? '已取消' : '已改期'}</span>}
+        </p>
+        {unread && (
+          <div className="card-actions spaced">
+            {live && (
+              <button type="button" className="primary" onClick={() => void window.nest.openFollowUp(item.id)}>
+                去聊聊
+              </button>
+            )}
+            <button type="button" disabled={busy} onClick={() => void run('inbox.markRead', { ids: [item.id] })}>
+              知道了
+            </button>
+          </div>
+        )}
+      </li>
+    );
+  }
 
   // 按提醒的当前状态说明：入箱后被推迟/改期/取消的卡片只显示状态（R15.AC-4）
   let state: string | null = null;

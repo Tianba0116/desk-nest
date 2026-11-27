@@ -14,6 +14,7 @@ const bubble: BubbleBridge = {
   resize: (height) => ipcRenderer.send(BubbleIpc.resize, height),
   close: () => ipcRenderer.send(BubbleIpc.close),
   openInbox: () => ipcRenderer.send(BubbleIpc.openInbox),
+  openFollowUp: (inboxId) => ipcRenderer.send(BubbleIpc.openFollowUp, inboxId),
   command: (name, input, operationId) => ipcRenderer.invoke(BubbleIpc.command, name, input, operationId),
 };
 

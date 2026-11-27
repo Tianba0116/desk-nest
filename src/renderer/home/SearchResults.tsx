@@ -1,9 +1,9 @@
 import { useDeferredValue } from 'react';
 import { formatTime, useQuery } from './api';
 
-export function SearchResults({ query, onOpen }: { query: string; onOpen: (type: 'note' | 'task', id: string) => void }) {
+export function SearchResults({ query, onOpen }: { query: string; onOpen: (type: 'note' | 'task' | 'topic', id: string) => void }) {
   const deferred = useDeferredValue(query.trim());
-  const { data: hits, error } = useQuery('notebook.search', { query: deferred }, ['notes', 'tasks']);
+  const { data: hits, error } = useQuery('notebook.search', { query: deferred }, ['notes', 'tasks', 'topics']);
 
   return (
     <section aria-labelledby="search-title">
@@ -12,18 +12,26 @@ export function SearchResults({ query, onOpen }: { query: string; onOpen: (type:
         <p className="view-hint">按 Esc 清除搜索。</p>
       </header>
       {error && <p className="load-error">{error}</p>}
-      {hits && hits.length === 0 && <p className="empty">没有找到相关的笔记或待办。</p>}
+      {hits && hits.length === 0 && <p className="empty">没有找到相关的笔记、待办或事项。</p>}
       <ul className="card-list" role="list" aria-label="搜索结果">
         {hits?.map((hit) => {
           const title =
             hit.type === 'note' ? hit.item.title || hit.item.body.split('\n')[0] || '' : hit.item.title;
           const snippet = hit.type === 'note' ? hit.item.body : hit.item.progressNote;
+          const badge =
+            hit.type === 'note'
+              ? '笔记'
+              : hit.type === 'topic'
+                ? hit.item.status === 'active'
+                  ? '事项'
+                  : '事项 · 已结束'
+                : hit.item.status === 'done'
+                  ? '待办 · 已完成'
+                  : '待办';
           return (
             <li key={`${hit.type}:${hit.item.id}`}>
               <button type="button" className="card search-hit" onClick={() => onOpen(hit.type, hit.item.id)}>
-                <span className="badge">
-                  {hit.type === 'note' ? '笔记' : hit.item.status === 'done' ? '待办 · 已完成' : '待办'}
-                </span>
+                <span className="badge">{badge}</span>
                 <span className="card-title-inline">{title}</span>
                 {snippet && snippet !== title && <span className="snippet">{snippet}</span>}
                 <span className="meta">更新于 {formatTime(hit.item.updatedAt)}</span>

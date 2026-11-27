@@ -246,7 +246,8 @@ export function confirmDraft(db: Database, commands: CommandService, draftId: st
   if ((row.expires_at ?? 0) <= now) return { ok: false, operationId, errorCode: CommandErrorCodes.expired };
   if (!row.suggestion_json) return { ok: false, operationId, errorCode: CommandErrorCodes.invalidState };
   const suggestion = JSON.parse(row.suggestion_json) as StoredSuggestion;
-  const result = commands.run(row.kind, suggestion.input, { operationId, origin: 'ui' });
+  // 用户在对话卡片上确认：记录来源是这一轮对话（R11.AC-4）
+  const result = commands.run(row.kind, suggestion.input, { operationId, origin: 'ui', turnId: row.turn_id });
   if (result.ok) {
     db.run(
       `UPDATE turn_actions SET state = 'committed', args_json = ?, result_json = ?, resolved_by = ?, updated_at = ?
@@ -257,6 +258,22 @@ export function confirmDraft(db: Database, commands: CommandService, draftId: st
       now,
       draftId,
     );
+  }
+  return result;
+}
+
+/** 卡片上的“撤销”：执行工具声明的反向命令（走 UI 命令入口）；重复点击取回同一个结果 */
+export function undoAction(db: Database, commands: CommandService, actionId: string, now: number): CommandResult {
+  const operationId = `undo-${actionId}`;
+  const row = loadAction(db, actionId);
+  if (!row || row.state !== 'committed' || !row.result_json) {
+    return { ok: false, operationId, errorCode: CommandErrorCodes.invalidState };
+  }
+  const undo = commands.toolSpec(row.kind)?.undo?.(JSON.parse(row.result_json));
+  if (!undo) return { ok: false, operationId, errorCode: CommandErrorCodes.invalidState };
+  const result = commands.run(undo.command, undo.input, { operationId, origin: 'ui' });
+  if (result.ok) {
+    db.run(`UPDATE turn_actions SET error_code = 'UNDONE', updated_at = ? WHERE operation_id = ?`, now, actionId);
   }
   return result;
 }
@@ -322,6 +339,8 @@ export function actionCards(db: Database, commands: CommandService, turnIds: str
       const spec = commands.toolSpec(row.kind);
       Object.assign(card, spec?.card?.(db, JSON.parse(row.result_json)) ?? {});
       if (readyFlags(row).onceOnly) card.onceOnly = true;
+      if (row.error_code === 'UNDONE') card.undone = true;
+      else if (spec?.undo) card.canUndo = true;
     }
     if (state === 'awaiting_input') {
       card.question = row.question ?? '';

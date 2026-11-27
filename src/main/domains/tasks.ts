@@ -12,7 +12,8 @@ import {
 } from '../../shared/contracts/notebook';
 import { CommandError, defineCommand, requireRevision } from '../application/commands';
 import type { Database } from '../storage/database';
-import { cancelRemindersForTask } from './reminders';
+import { cancelRemindersForTask, closeFollowUpsForTarget } from './reminders';
+import { findTopic } from './topics';
 import { likeConditions, normalizeForSearch, searchTerms } from './text-search';
 
 interface TaskRow {
@@ -23,6 +24,7 @@ interface TaskRow {
   progress_note: string;
   progress_updated_at: number | null;
   completed_at: number | null;
+  topic_id: string | null;
   revision: number;
   deleted_at: number | null;
   created_at: number;
@@ -30,7 +32,7 @@ interface TaskRow {
 }
 
 const COLUMNS =
-  'id, title, status, due_at, progress_note, progress_updated_at, completed_at, revision, deleted_at, created_at, updated_at';
+  'id, title, status, due_at, progress_note, progress_updated_at, completed_at, topic_id, revision, deleted_at, created_at, updated_at';
 
 export function toTaskDto(row: TaskRow): TaskDto {
   return {
@@ -41,6 +43,7 @@ export function toTaskDto(row: TaskRow): TaskDto {
     progressNote: row.progress_note,
     progressUpdatedAt: row.progress_updated_at,
     completedAt: row.completed_at,
+    topicId: row.topic_id,
     revision: row.revision,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -66,19 +69,29 @@ const Id = z.string().min(1).max(100);
 const Title = z.string().trim().min(1, '标题不能为空').max(TASK_TITLE_MAX);
 const DueAt = z.number().int().nonnegative().nullable();
 const Revision = z.number().int().positive();
+const TopicId = Id.nullable();
+
+/** 待办可以关联事项（R07.AC-3）；被忘记的事项不能再关联 */
+function requireTopic(db: Database, topicId: string | null): void {
+  if (!topicId) return;
+  const topic = findTopic(db, topicId);
+  if (!topic || topic.forgotten_at !== null) throw new CommandError(CommandErrorCodes.notFound, '关联的事项不存在');
+}
 
 export const createTask = defineCommand({
   name: 'tasks.create',
-  input: z.object({ title: Title, dueAt: DueAt.default(null) }),
-  invalidates: ['tasks'],
+  input: z.object({ title: Title, dueAt: DueAt.default(null), topicId: TopicId.default(null) }),
+  invalidates: ['tasks', 'topics'],
   execute({ db, now, newId }, input): TaskDto {
+    requireTopic(db, input.topicId);
     const id = newId();
     db.run(
-      `INSERT INTO tasks (id, title, status, due_at, search_text, revision, created_at, updated_at)
-       VALUES (?, ?, 'open', ?, ?, 1, ?, ?)`,
+      `INSERT INTO tasks (id, title, status, due_at, topic_id, search_text, revision, created_at, updated_at)
+       VALUES (?, ?, 'open', ?, ?, ?, 1, ?, ?)`,
       id,
       input.title,
       input.dueAt,
+      input.topicId,
       searchText(input.title, ''),
       now,
       now,
@@ -89,15 +102,18 @@ export const createTask = defineCommand({
 
 export const updateTask = defineCommand({
   name: 'tasks.update',
-  input: z.object({ id: Id, revision: Revision, title: Title, dueAt: DueAt }),
-  invalidates: ['tasks'],
+  input: z.object({ id: Id, revision: Revision, title: Title, dueAt: DueAt, topicId: TopicId.optional() }),
+  invalidates: ['tasks', 'topics'],
   execute({ db, now }, input): TaskDto {
     const row = findTask(db, input.id);
     requireRevision(row, input.revision);
+    const topicId = input.topicId === undefined ? (row as TaskRow).topic_id : input.topicId;
+    if (topicId !== (row as TaskRow).topic_id) requireTopic(db, topicId);
     db.run(
-      `UPDATE tasks SET title = ?, due_at = ?, search_text = ?, revision = revision + 1, updated_at = ? WHERE id = ?`,
+      `UPDATE tasks SET title = ?, due_at = ?, topic_id = ?, search_text = ?, revision = revision + 1, updated_at = ? WHERE id = ?`,
       input.title,
       input.dueAt,
+      topicId,
       searchText(input.title, (row as TaskRow).progress_note),
       now,
       input.id,
@@ -109,8 +125,8 @@ export const updateTask = defineCommand({
 export const setTaskStatus = defineCommand({
   name: 'tasks.setStatus',
   input: z.object({ id: Id, revision: Revision.optional(), status: z.enum(['open', 'done']) }),
-  invalidates: ['tasks'],
-  execute({ db, now }, input): TaskDto {
+  invalidates: ['tasks', 'reminders', 'inbox', 'topics'],
+  execute({ db, now, newId }, input): TaskDto {
     const row = findTask(db, input.id);
     requireRevision(row, input.revision);
     if ((row as TaskRow).status === input.status) return toTaskDto(row as TaskRow);
@@ -121,6 +137,8 @@ export const setTaskStatus = defineCommand({
       now,
       input.id,
     );
+    // 完成后，尚未到期的跟进自动取消（R12.AC-5）；提醒不受影响
+    if (input.status === 'done') closeFollowUpsForTarget(db, 'task', input.id, 'done', now, newId);
     return mustLoad(db, input.id);
   },
 });
@@ -149,10 +167,11 @@ export const recordTaskProgress = defineCommand({
 export const deleteTask = defineCommand({
   name: 'tasks.delete',
   input: z.object({ id: Id, revision: Revision.optional() }),
-  invalidates: ['tasks', 'reminders', 'inbox'],
-  execute({ db, now }, input): TaskDto {
+  invalidates: ['tasks', 'reminders', 'inbox', 'topics'],
+  execute({ db, now, newId }, input): TaskDto {
     requireRevision(findTask(db, input.id), input.revision);
     db.run('UPDATE tasks SET deleted_at = ?, revision = revision + 1, updated_at = ? WHERE id = ?', now, now, input.id);
+    closeFollowUpsForTarget(db, 'task', input.id, 'deleted', now, newId);
     // 同一事务取消关联的提醒，不留下仍会触发的悬空提醒（R07.AC-4）
     cancelRemindersForTask(db, input.id, now);
     return mustLoad(db, input.id);

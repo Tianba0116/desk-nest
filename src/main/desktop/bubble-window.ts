@@ -23,6 +23,7 @@ export interface BubbleHooks {
   anchor(): Rectangle | null;
   onShown(inboxIds: string[]): void;
   openInbox(): void;
+  openFollowUp(inboxId: string): void;
 }
 
 export class BubbleHost implements BubbleChannel {
@@ -56,6 +57,11 @@ export class BubbleHost implements BubbleChannel {
     this.on(BubbleIpc.openInbox, () => {
       this.hide();
       this.hooks.openInbox();
+    });
+    this.on(BubbleIpc.openFollowUp, (_event, inboxId) => {
+      if (typeof inboxId !== 'string' || inboxId.length > 100) return;
+      this.hide();
+      this.hooks.openFollowUp(inboxId);
     });
     const handler = (event: Electron.IpcMainInvokeEvent, ...args: unknown[]): unknown => {
       if (!this.isSender(event.sender)) throw new Error('NOT_ALLOWED');

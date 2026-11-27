@@ -19,6 +19,7 @@ const nest: NestBridge = {
   },
   system: (request) => ipcRenderer.invoke(NestIpc.system, request),
   model: (request) => ipcRenderer.invoke(NestIpc.model, request),
+  openFollowUp: (inboxId) => ipcRenderer.invoke(NestIpc.followUp, inboxId),
 };
 
 contextBridge.exposeInMainWorld('nest', nest);

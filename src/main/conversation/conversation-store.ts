@@ -6,6 +6,8 @@ import { CHAT_MESSAGE_MAX, type ChatMessageDto, type MessageStatus, type ModelEr
 import { CommandErrorCodes } from '../../shared/contracts/command';
 import { CommandError, defineCommand } from '../application/commands';
 import type { Database } from '../storage/database';
+import { readContextState } from '../application/context-state';
+import { followUpQuestion } from '../domains/reminders';
 import { reconcileReadyActions } from './actions';
 
 export const DEFAULT_CONVERSATION = 'default';
@@ -19,6 +21,8 @@ interface MessageRow {
   status: MessageStatus;
   turn_id: string | null;
   created_at: number;
+  /** 所属轮次的错误码（chatHistory 查询时带出） */
+  turn_error?: string | null;
 }
 
 export interface TurnRow {
@@ -32,7 +36,16 @@ export interface TurnRow {
 }
 
 function toDto(row: MessageRow): ChatMessageDto {
-  return { id: row.id, role: row.role, content: row.content, status: row.status, turnId: row.turn_id, createdAt: row.created_at };
+  return {
+    id: row.id,
+    role: row.role,
+    content: row.content,
+    status: row.status,
+    turnId: row.turn_id,
+    createdAt: row.created_at,
+    ...(row.turn_error === 'SUPERSEDED' && row.role === 'assistant' ? { superseded: true } : {}),
+    ...(row.role === 'assistant' && row.turn_id === null ? { followUp: true } : {}),
+  };
 }
 
 function activeTurn(db: Database, conversationId: string): TurnRow | undefined {
@@ -112,7 +125,37 @@ export const retryMessage = defineCommand({
   },
 });
 
-export const chatCommands = [sendMessage, retryMessage];
+/**
+ * 跟进到期后点“去聊聊”（R12）：宠物把按最新进展生成的问题说出来，用户接着回答。
+ * operationId 由信箱项决定，重复点击只出现一次。
+ */
+export const openFollowUp = defineCommand({
+  name: 'chat.openFollowUp',
+  input: z.object({ inboxId: z.string().min(1).max(100) }),
+  invalidates: ['conversation', 'inbox'],
+  execute({ db, now, newId }, input): { messageId: string } {
+    const item = db.get<{ source_id: string; category: string }>(
+      `SELECT source_id, category FROM inbox_items WHERE id = ?`,
+      input.inboxId,
+    );
+    if (!item || item.category !== 'follow_up') throw new CommandError(CommandErrorCodes.notFound);
+    const question = followUpQuestion(db, item.source_id);
+    if (!question) throw new CommandError(CommandErrorCodes.notFound);
+    const messageId = newId();
+    db.run(
+      `INSERT INTO messages (id, conversation_id, turn_id, role, content, status, created_at)
+       VALUES (?, ?, NULL, 'assistant', ?, 'complete', ?)`,
+      messageId,
+      DEFAULT_CONVERSATION,
+      question,
+      now,
+    );
+    db.run(`UPDATE inbox_items SET status = 'read', read_at = ? WHERE id = ? AND status = 'unread'`, now, input.inboxId);
+    return { messageId };
+  },
+});
+
+export const chatCommands = [sendMessage, retryMessage, openFollowUp];
 
 // ---------- 轮次结束（runner 调用；短事务，不经过 UI） ----------
 
@@ -130,7 +173,7 @@ export function markResponding(db: Database, turnId: string): void {
 
 export type TurnOutcome =
   | { kind: 'completed'; text: string }
-  | { kind: 'cancelled'; text: string }
+  | { kind: 'cancelled'; text: string; superseded?: boolean }
   | { kind: 'failed'; text: string; errorCode: ModelErrorCode };
 
 /** 对比流式方案用的计时与计数（D-06）；只存本机 */
@@ -171,7 +214,7 @@ export function finishTurn(
     db.run(
       `UPDATE turns SET state = ?, error_code = ?, ended_at = ?, strategy = ?, metrics_json = ? WHERE id = ?`,
       state,
-      outcome.kind === 'failed' ? outcome.errorCode : null,
+      outcome.kind === 'failed' ? outcome.errorCode : outcome.kind === 'cancelled' && outcome.superseded ? 'SUPERSEDED' : null,
       now,
       metrics?.strategy ?? null,
       metrics ? JSON.stringify(metrics) : null,
@@ -215,27 +258,34 @@ export function interruptUnfinishedTurns(db: Database, now: number): number {
 export function recentContext(db: Database, beforeMessageId: string, limit = CONTEXT_MESSAGE_LIMIT): ChatMessageDto[] {
   const current = db.get<MessageRow>('SELECT * FROM messages WHERE id = ?', beforeMessageId);
   if (!current) return [];
+  // 纠正或忘记之后只带此刻以后的历史；被排除的来源消息和它的回复都不再读取（TD §9.4）
+  const { historyFloor } = readContextState(db);
   const rows = db.all<MessageRow>(
     `SELECT m.* FROM messages m
-     WHERE m.conversation_id = ? AND m.created_at <= ? AND m.id != ? AND m.context_excluded_at IS NULL
+     WHERE m.conversation_id = ? AND m.created_at <= ? AND m.created_at > ? AND m.id != ? AND m.context_excluded_at IS NULL
        AND ((m.role = 'assistant' AND m.status = 'complete')
          OR (m.role = 'user' AND EXISTS (SELECT 1 FROM turns t WHERE t.user_message_id = m.id AND t.state = 'completed')))
+       AND NOT EXISTS (SELECT 1 FROM context_exclusions e WHERE e.source_type = 'message' AND e.source_id = m.id)
+       AND NOT EXISTS (SELECT 1 FROM turns t JOIN context_exclusions e ON e.source_type = 'message' AND e.source_id = t.user_message_id
+                       WHERE t.id = m.turn_id)
      ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?`,
     DEFAULT_CONVERSATION,
     current.created_at,
+    historyFloor,
     current.id,
     limit,
   );
   const ordered = rows.reverse().map(toDto);
-  // 上下文从用户消息开始，不留下孤立的回复
-  while (ordered[0]?.role === 'assistant') ordered.shift();
+  // 上下文从用户消息开始，不留下孤立的回复；宠物按约定来问的跟进可以开头
+  while (ordered[0]?.role === 'assistant' && !ordered[0].followUp) ordered.shift();
   return [...ordered, toDto(current)];
 }
 
 export function chatHistory(db: Database, limit = 200): ChatMessageDto[] {
   return db
     .all<MessageRow>(
-      `SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?`,
+      `SELECT m.*, t.error_code AS turn_error FROM messages m LEFT JOIN turns t ON t.id = m.turn_id
+       WHERE m.conversation_id = ? ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?`,
       DEFAULT_CONVERSATION,
       limit,
     )

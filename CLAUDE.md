@@ -1,6 +1,6 @@
 # 桌面陪伴宠物 — 开发约定
 
-当前阶段：**M1～M6** 已实现，等待实机验证（`docs/verification/M1.md`～`M6.md`）；M5、M6 尚未用真实模型服务测试（M6 的真实服务评估：`tests/eval/live.test.ts`，D-06 待关闭）。下一步是 M7（记住近况与约定跟进），范围已在 `docs/04-roadmap.md` 定稿（2026-11-27），正在开发。按 `docs/04-roadmap.md` 的里程碑逐版推进。
+当前阶段：**M1～M7** 已实现，等待实机验证（`docs/verification/M1.md`～`M7.md`）；M5～M7 尚未用真实模型服务测试（真实服务评估：`tests/eval/live.test.ts`，D-06 待关闭）。下一步是 M8（可自用版本），开工前先在 `docs/04-roadmap.md` 展开范围。按 `docs/04-roadmap.md` 的里程碑逐版推进。
 
 ## 文档入口（以这些为准）
 

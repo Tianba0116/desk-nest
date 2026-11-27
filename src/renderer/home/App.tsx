@@ -8,6 +8,7 @@ import { RemindersView } from './RemindersView';
 import { SearchResults } from './SearchResults';
 import { SettingsView } from './SettingsView';
 import { TasksView } from './TasksView';
+import { TopicsView } from './TopicsView';
 import { ToastProvider } from './toast';
 
 const SECTIONS: Array<{ label: string; views: Array<{ id: NestView; label: string; icon: string }> }> = [
@@ -21,6 +22,7 @@ const SECTIONS: Array<{ label: string; views: Array<{ id: NestView; label: strin
   {
     label: '小本子',
     views: [
+      { id: 'topics', label: '事项', icon: '🧭' },
       { id: 'notes', label: '笔记', icon: '📝' },
       { id: 'tasks', label: '待办', icon: '✅' },
       { id: 'recycle', label: '回收站', icon: '🗑️' },
@@ -47,9 +49,9 @@ export function App() {
     [],
   );
 
-  const openItem = useCallback((type: 'note' | 'task', id: string) => {
+  const openItem = useCallback((type: 'note' | 'task' | 'topic', id: string) => {
     setQuery('');
-    setView(type === 'note' ? 'notes' : 'tasks');
+    setView(type === 'note' ? 'notes' : type === 'task' ? 'tasks' : 'topics');
     setFocusId(id);
   }, []);
 
@@ -94,8 +96,8 @@ export function App() {
           <div className="search-bar" role="search">
             <input
               type="search"
-              aria-label="搜索笔记和待办"
-              placeholder="搜索笔记和待办，例如“简历”"
+              aria-label="搜索笔记、待办和事项"
+              placeholder="搜索笔记、待办和事项，例如“简历”"
               value={query}
               maxLength={200}
               onChange={(event) => setQuery(event.target.value)}
@@ -117,6 +119,8 @@ export function App() {
               <NotesView focusId={focusId} onFocused={() => setFocusId(null)} />
             ) : view === 'tasks' ? (
               <TasksView focusId={focusId} onFocused={() => setFocusId(null)} />
+            ) : view === 'topics' ? (
+              <TopicsView />
             ) : (
               <RecycleView />
             )}

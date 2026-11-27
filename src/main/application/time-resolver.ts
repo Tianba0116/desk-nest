@@ -263,3 +263,22 @@ export function detectRecurrence(text: string): Recurrence | null {
   for (const [pattern, kind] of RECURRENCE_RULES) if (pattern.test(text)) return kind;
   return null;
 }
+
+/**
+ * 有效期的结束时刻（R11.AC-6）：今天 / 本周（到周日）/ 本月 / N 天后，取那一天的 24:00（第二天 0 点）。
+ */
+export function endOfPeriod(
+  base: number,
+  timeZone: string,
+  period: { until?: 'today' | 'this_week' | 'this_month' | null; days?: number | null },
+): number | null {
+  const today = toZoned(base, timeZone);
+  let last: { year: number; month: number; day: number } | null = null;
+  if (period.days != null && period.days > 0) last = addDays(today, period.days - 1);
+  else if (period.until === 'today') last = today;
+  else if (period.until === 'this_week') last = addDays(today, 7 - today.weekday);
+  else if (period.until === 'this_month') last = addDays({ year: today.year, month: today.month + 1, day: 1 }, -1);
+  if (!last) return null;
+  const next = addDays(last, 1);
+  return fromZoned(next.year, next.month, next.day, 0, 0, timeZone);
+}

@@ -174,4 +174,59 @@ export const MIGRATIONS: readonly Migration[] = [
       ALTER TABLE notes ADD COLUMN source_message_id TEXT;
     `,
   },
+  {
+    version: 5,
+    name: 'M7：事项、记忆、约定跟进、上下文排除',
+    sql: `
+      -- 事项（R11）：持续一段时间的事；当前进展直接读这里，不另存“记忆副本”（TD §9.1）
+      CREATE TABLE topics (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('active', 'done', 'archived')),
+        progress_note TEXT NOT NULL DEFAULT '',
+        progress_updated_at INTEGER,
+        completed_at INTEGER,
+        search_text TEXT NOT NULL,
+        source_type TEXT NOT NULL,
+        source_message_id TEXT,
+        -- 忘记：保留记录但不再用于上下文，可以恢复（R11.AC-7）
+        forgotten_at INTEGER,
+        revision INTEGER NOT NULL DEFAULT 1,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE INDEX topics_live ON topics (forgotten_at, status, updated_at);
+
+      -- 记忆（R11）：用户明确要求记住的简短信息；临时信息带有效期（R11.AC-6）
+      CREATE TABLE memories (
+        id TEXT PRIMARY KEY,
+        content TEXT NOT NULL,
+        expires_at INTEGER,
+        search_text TEXT NOT NULL,
+        source_type TEXT NOT NULL,
+        source_message_id TEXT,
+        forgotten_at INTEGER,
+        revision INTEGER NOT NULL DEFAULT 1,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE INDEX memories_live ON memories (forgotten_at, expires_at, updated_at);
+
+      -- 不再进入模型上下文的来源（TD §9.4）：忘记具体信息时写入其来源消息
+      CREATE TABLE context_exclusions (
+        source_type TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (source_type, source_id)
+      );
+
+      ALTER TABLE tasks ADD COLUMN topic_id TEXT;
+      CREATE INDEX tasks_topic ON tasks (topic_id);
+      -- 约定跟进（R12）：kind = follow_up；完成后是否自动取消（TD §8.2 stop_policy）
+      ALTER TABLE scheduled_actions ADD COLUMN stop_policy TEXT NOT NULL DEFAULT 'on_target_closed';
+      ALTER TABLE scheduled_actions ADD COLUMN source_type TEXT;
+      ALTER TABLE turns ADD COLUMN context_epoch INTEGER;
+    `,
+  },
 ];

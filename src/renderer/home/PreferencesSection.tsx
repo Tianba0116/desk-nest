@@ -1,7 +1,7 @@
 // 称呼（R10.AC-1～3 的称呼部分）：不依赖模型，直接设置、修改、清除。
 
 import { useEffect, useState, type FormEvent } from 'react';
-import { NICKNAME_MAX, type PreferencesDto } from '../../shared/contracts/preferences';
+import { NICKNAME_MAX, STYLE_LABELS, STYLES, type PreferencesDto, type Style } from '../../shared/contracts/preferences';
 import { describeError, runCommand, useQuery } from './api';
 
 export function PreferencesSection() {
@@ -35,10 +35,28 @@ export function PreferencesSection() {
 
   return (
     <form className="composer settings-form" onSubmit={submit} aria-label="称呼">
-      <h2 className="section-title first">称呼</h2>
+      <h2 className="section-title first">称呼与说话方式</h2>
       <label className="field">
         <span>宠物怎么叫你（也可以在对话里说“叫我小林”）</span>
         <input value={value} maxLength={NICKNAME_MAX} onChange={(event) => setValue(event.target.value)} placeholder="不填就不使用称呼" />
+      </label>
+      <label className="field">
+        <span>说话方式（也可以在对话里说“说话简短一点”）</span>
+        <select
+          value={data?.style ?? ''}
+          disabled={!data || busy}
+          onChange={(event) => {
+            const style = (STYLES as readonly string[]).includes(event.target.value) ? (event.target.value as Style) : null;
+            void runCommand('preferences.setStyle', { style });
+          }}
+        >
+          <option value="">默认</option>
+          {STYLES.map((s) => (
+            <option key={s} value={s}>
+              {STYLE_LABELS[s]}
+            </option>
+          ))}
+        </select>
       </label>
       {message && (
         <p className={message.tone === 'ok' ? 'ok-text' : 'warn'} role="status">

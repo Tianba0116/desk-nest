@@ -14,6 +14,8 @@ export const BubbleIpc = {
   close: 'bubble:close',
   /** 渲染层 → 主进程：打开小窝的信箱 */
   openInbox: 'bubble:open-inbox',
+  /** 渲染层 → 主进程：(inboxId) 跟进“去聊聊” */
+  openFollowUp: 'bubble:open-follow-up',
   /** 渲染层 → 主进程（invoke）：执行允许的命令 (name, input, operationId) */
   command: 'bubble:command',
 } as const;
@@ -27,5 +29,6 @@ export interface BubbleBridge {
   resize(height: number): void;
   close(): void;
   openInbox(): void;
+  openFollowUp(inboxId: string): void;
   command<T = unknown>(name: (typeof BUBBLE_COMMANDS)[number], input: unknown, operationId: string): Promise<CommandResult<T>>;
 }

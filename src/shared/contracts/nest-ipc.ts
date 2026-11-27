@@ -3,6 +3,7 @@
 import type { ConversationStrategy, ModelSettingsDto, ModelSettingsInput, ModelTestResult } from './chat';
 import type { CommandResult, DataTopic } from './command';
 import type { NoteDto, RecycledItem, SearchHit, TaskDto } from './notebook';
+import type { MemoryDto, TopicDetailDto, TopicDto } from './memory';
 import type { PreferencesDto } from './preferences';
 import type { InboxItemDto, ReminderDto } from './reminders';
 
@@ -19,9 +20,11 @@ export const NestIpc = {
   system: 'nest:system',
   /** 渲染层 → 主进程（invoke）：模型设置，见 ModelRequest */
   model: 'nest:model',
+  /** 渲染层 → 主进程（invoke）：(inboxId) 跟进到期后“去聊聊”，打开对话 */
+  followUp: 'nest:follow-up',
 } as const;
 
-export type NestView = 'inbox' | 'reminders' | 'notes' | 'tasks' | 'recycle' | 'settings';
+export type NestView = 'inbox' | 'reminders' | 'notes' | 'tasks' | 'topics' | 'recycle' | 'settings';
 
 export type ModelRequest =
   | { action: 'get' }
@@ -56,6 +59,8 @@ export interface NestQueries {
   'inbox.list': { input: Record<string, never>; output: InboxItemDto[] };
   'inbox.unreadCount': { input: Record<string, never>; output: number };
   'preferences.get': { input: Record<string, never>; output: PreferencesDto };
+  'topics.list': { input: Record<string, never>; output: { active: TopicDetailDto[]; closed: TopicDetailDto[]; forgotten: TopicDto[] } };
+  'memories.list': { input: Record<string, never>; output: { active: MemoryDto[]; forgotten: MemoryDto[] } };
 }
 
 export type QueryName = keyof NestQueries;
@@ -71,5 +76,6 @@ export interface NestBridge {
   onChanged(listener: (topics: DataTopic[]) => void): () => void;
   onNavigate(listener: (view: NestView) => void): () => void;
   system(request: SystemRequest): Promise<StartupState>;
+  openFollowUp(inboxId: string): Promise<void>;
   model(request: ModelRequest): Promise<ModelResponse>;
 }

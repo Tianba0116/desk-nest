@@ -194,7 +194,10 @@ export function Chat() {
             <div className="bubble-text">{m.content}</div>
             <div className="msg-meta">
               <span>{formatTime(m.createdAt)}</span>
-              {partial.has(m.id) ? (
+              {m.followUp && <span className="follow">💬 约好的跟进</span>}
+              {m.superseded ? (
+                <span className="state">旧回复：内容已更新，已按新内容重来</span>
+              ) : partial.has(m.id) ? (
                 <span className="state">部分完成</span>
               ) : (
                 STATUS_TEXT[m.status] && <span className="state">{STATUS_TEXT[m.status]}</span>

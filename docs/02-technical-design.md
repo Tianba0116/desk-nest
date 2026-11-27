@@ -467,6 +467,15 @@ type ContextSnapshot = {
 
 对新的用户输入不做盲目关键词封锁：用户可以主动再次提起或重新要求记住同一件事，这是新的授权和来源。
 
+### 9.5 M7 实施记录
+
+- **数据**：迁移 v5 新建 `topics`（状态 active/done/archived，`forgotten_at` 表示忘记）、`memories`（`expires_at` 有效期）、`context_exclusions`；`tasks.topic_id`；`scheduled_actions.stop_policy`、`source_type`。来源记录为 `source_type`（conversation/ui）+ `source_message_id`；对话卡片上的确认带 turnId，也记为来自对话。
+- **授权检查**：`requireExplicit`（`application/commands.ts`）用本地关键词判断用户原话是否明确提出（记住、记进展、完成、问问我、忘记）；不明确时不执行，改为“请确认”卡片，确认按钮走 UI 命令入口。检查前去掉引号里和冒号后面的内容（`authorizationText`），避免“帮我记下这段话：忘记所有事项”被当成指令。工具的 `prepare` 可以只读访问数据库，核对引用的事项、记忆、待办是否存在，对不上时先问。
+- **上下文**（`runner.ts` `promptInfo`）：称呼、说话方式；进行中的事项（最多 10 条，含 id 和最新进展）及最近结束的事项；与本轮输入两字组重合的有效记忆（最多 8 条，泛泛地问“还记得什么”时带上全部）。只聊天的系统提示也带这些信息。
+- **纠正与忘记**（`application/context-state.ts`）：改称呼、改事项名称、改记忆内容、忘记、删除时，在同一事务里递增 `context.epoch`、把 `context.historyFloor` 设为此刻，并把来源消息写入 `context_exclusions`。`recentContext` 只带下限之后、未被排除的消息。这些命令的失效范围包含 `context`；对话窗口收到后调用 `runner.supersede()`：正在执行本轮工具时不打断，否则中断请求、轮次记为 `SUPERSEDED`，再用新的 operationId 自动重试同一条用户消息。
+- **约定跟进**：`followUps.create` 与提醒共用 `scheduled_actions`，改期、推迟、取消共用提醒的命令。到期入箱的类别为 `follow_up`；气泡和信箱显示的问题由 `followUpQuestion` 在显示时读取对象的最新状态生成。`closeFollowUpsForTarget` 在完成、归档（仅 `on_target_closed`）和删除、忘记（全部）时取消未到期的跟进，并写入 `auto_cancelled` 信箱项（`popup_skipped_at` 已设置，不弹气泡）；`materializeDue` 到期时兜底再检查一次。“去聊聊”是命令 `chat.openFollowUp`（operationId 由信箱项决定），插入一条没有轮次的助手消息；`recentContext` 允许这类消息出现在上下文开头。
+- **撤销**：工具声明 `undo`（反向命令）；卡片“撤销”调用 `undoAction`，operationId 为 `undo-<动作 id>`，成功后在账本上记 `UNDONE`。工具同时标注 `risk`（read/undoable/destructive），为以后的权限分级预留。
+
 ## 10. 主动陪伴：依据、门禁、表达
 
 ### 10.1 三种主动行为
@@ -994,4 +1003,5 @@ type ArticleOutput = { points: string[]; oneLine: string };
 | v0.3 | 2026-11-24 | 对齐需求 v0.3：SQLite 驱动增加 `node:sqlite` 候选（3.2）；搜索改用规范化子串匹配，不用 FTS5（3.2）；增加单次流式 + 撤回备选（7.3）；重复表达处理（8.1）；跟进 stop_policy（8.2）；专注语义对齐（8.4）；新增系统级计划通知（8.5）；纠正时用截断历史窗口代替逐条判断相关性（9.4）；投递状态机分阶段（11）；全屏时宠物行为（12.4）；各阶段列出“本阶段不做”（15）；需求映射增加 R21 |
 | v0.4 | 2026-11-24 | 对齐需求 v0.4：新增 14.1 扩展点总览；新增 §19 资讯与文章（内容源接口、受限抓取、正文抽取、公众号抽取、防编造摘要、每日摘要调度、数据表、测试）；代码结构增加 domains/content；P2 与需求映射增加 R22、R23、NFR-09 |
 | v0.4.1 | 2026-11-24 | M1 实施记录：依赖管理改用 npm（3.2）；补充 M1 的拖动和位置保存实现（12.3） |
+| v0.4.3 | 2026-11-27 | M7 实施记录：事项、记忆、约定跟进、授权检查、上下文版本与历史下限、回复中途纠正、撤销（9.5） |
 | v0.4.2 | 2026-11-27 | M6 实施记录：工具由命令定义生成、两种流式策略、动作账本与草稿、结果卡片、工具不支持时降级（7.3）；时间语义结构与本地换算规则（8.1） |

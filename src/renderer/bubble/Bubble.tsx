@@ -51,7 +51,9 @@ export function Bubble() {
   return (
     <div className="bubble" ref={ref} role="alertdialog" aria-labelledby="bubble-title">
       <div className="bubble-head">
-        <span id="bubble-title">⏰ {single ? '到点啦' : `有 ${items.length} 个提醒到期`}</span>
+        <span id="bubble-title">
+          {single?.kind === 'follow_up' ? '💬 约好的跟进' : `⏰ ${single ? '到点啦' : `有 ${items.length} 个提醒到期`}`}
+        </span>
         <button type="button" className="icon" aria-label="收起（不影响信箱）" title="收起（不影响信箱）" onClick={() => window.bubble.close()}>
           ×
         </button>
@@ -74,9 +76,14 @@ export function Bubble() {
         >
           知道了
         </button>
+        {single?.kind === 'follow_up' && (
+          <button type="button" className="primary" onClick={() => window.bubble.openFollowUp(single.inboxId)}>
+            去聊聊
+          </button>
+        )}
         {single && (
           <button type="button" disabled={busy} onClick={() => void act('reminders.snooze', { id: single.reminderId, minutes: 10 })}>
-            10 分钟后再提醒
+            {single.kind === 'follow_up' ? '10 分钟后再问' : '10 分钟后再提醒'}
           </button>
         )}
         <button type="button" className="link" onClick={() => window.bubble.openInbox()}>

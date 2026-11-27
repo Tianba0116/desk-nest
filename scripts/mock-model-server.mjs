@@ -8,6 +8,7 @@
 //
 // 在小窝“设置”里选“自定义”，地址填 http://127.0.0.1:18081/v1，模型名随意（例如 mock），密钥留空。
 
+import { appendFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 
 const PORT = Number(process.env.PORT ?? 18081);
@@ -75,6 +76,33 @@ function decide(userText, system) {
   if (/别再?叫我|不要叫我|不用叫我/.test(userText)) return [{ name: 'preferences_setNickname', args: { nickname: null } }];
   const nick = /(?:以后|就)?叫我(.{1,10}?)(?:吧|就好|就行)?[。！!～]*$/.exec(userText);
   if (nick && !/提醒/.test(userText)) return [{ name: 'preferences_setNickname', args: { nickname: nick[1] } }];
+  // M7：事项、进展、完成、跟进、记忆、忘记、说话方式（只认几种固定说法）
+  const topicId = /id=([\w-]+)，“/.exec(system)?.[1];
+  const memoryId = /与这句话相关的[\s\S]*?- id=([\w-]+)，/.exec(system)?.[1];
+  if (/说话简短/.test(userText)) return [{ name: 'preferences_setStyle', args: { style: 'brief' } }];
+  if (/忘掉|忘了吧|别再提/.test(userText)) {
+    if (memoryId && !/事项|那件事|面试/.test(userText)) return [{ name: 'memories_forget', args: { id: memoryId } }];
+    if (topicId) return [{ name: 'topics_forget', args: { id: topicId } }];
+  }
+  const topic = /^记住我(?:在|正在)(.+?)[。！!～]*$/.exec(userText);
+  if (topic) return [{ name: 'topics_create', args: { title: topic[1] } }];
+  const memo = /^记住我(.+?)[。！!～]*$/.exec(userText);
+  if (memo) {
+    const validFor = /这周/.test(memo[1]) ? { until: 'this_week' } : /今天/.test(memo[1]) ? { until: 'today' } : null;
+    return [{ name: 'memories_create', args: { content: memo[1], ...(validFor ? { validFor } : {}) } }];
+  }
+  const prog = /^(.+?)，?帮?我?记一下进展/.exec(userText);
+  if (prog && topicId) return [{ name: 'topics_recordProgress', args: { id: topicId, note: prog[1] } }];
+  if (/完成了|结束了/.test(userText) && topicId) return [{ name: 'topics_setStatus', args: { id: topicId, status: 'done' } }];
+  const ask = /问问我(.+?)[。！!～]*$/.exec(userText);
+  if (ask) {
+    return [
+      {
+        name: 'followUps_create',
+        args: { purpose: ask[1], topicId: topicId ?? null, when: parseWhen(userText), reviewAfterDone: /复盘/.test(userText) },
+      },
+    ];
+  }
   const note = /^(?:帮我)?(?:记一下|记下|记住)(?:这段话|这句话)?[：:，,\s]*(.+)$/.exec(userText);
   if (note) return [{ name: 'notes_create', args: { body: note[1] } }];
   if (/提醒我/.test(userText) && !/不用|别|算了/.test(userText)) {
@@ -92,7 +120,15 @@ function express(messages, userText) {
     if (/已完成/.test(results.content)) return '好嘞，办好啦，看看下面的卡片～';
     return '这件事我现在还做不到，可以去小窝里操作哦。';
   }
-  const nickname = /称呼对方为“(.+?)”/.exec(messages[0]?.content ?? '')?.[1];
+  const system = messages[0]?.content ?? '';
+  const nickname = /称呼对方为“(.+?)”/.exec(system)?.[1];
+  // 回答“还记得吗”：只复述系统提示里列出的事项和记忆
+  if (/记得|过敏|有什么事/.test(userText)) {
+    const topic = /id=[\w-]+，“(.+?)”，(.+)/.exec(system);
+    const memo = /与这句话相关的[\s\S]*?- id=[\w-]+，(.+)/.exec(system);
+    const parts = [topic ? `记得“${topic[1]}”，${topic[2]}` : '', memo ? `记得你说过：${memo[1]}` : ''].filter(Boolean);
+    return `${nickname ? `${nickname}，` : ''}${parts.length ? parts.join('；') : '这个我不记得了'}`;
+  }
   return `${nickname ? `${nickname}，` : ''}（模拟回复）我听到你说：“${userText.slice(0, 30)}”`;
 }
 
@@ -122,6 +158,8 @@ const server = createServer((req, res) => {
       return;
     }
     console.log(`[mock] ${body.tools ? '决定' : '表达'}：${userText.slice(0, 40)}`);
+    // 回流检查用：记录每次请求的全部消息（不含工具定义）
+    if (process.env.MOCK_LOG) appendFileSync(process.env.MOCK_LOG, `${JSON.stringify(messages)}\n`);
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' });
     const send = (delta, finish = null) => res.write(`data: ${JSON.stringify({ choices: [{ delta, finish_reason: finish }] })}\n\n`);
     const calls = body.tools && !isRepair ? decide(userText, system) : null;

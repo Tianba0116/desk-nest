@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { TASK_PROGRESS_MAX, TASK_TITLE_MAX, type TaskDto } from '../../shared/contracts/notebook';
 import { formatTime, fromLocalInputValue, toLocalInputValue, useQuery } from './api';
+import { FollowUpForm, TopicSelect } from './FollowUpForm';
 import { useAction, useDeleteWithUndo } from './useAction';
 
 export function TasksView({ focusId, onFocused }: { focusId: string | null; onFocused: () => void }) {
@@ -39,12 +40,13 @@ export function TasksView({ focusId, onFocused }: { focusId: string | null; onFo
 function TaskComposer() {
   const [title, setTitle] = useState('');
   const [due, setDue] = useState('');
+  const [topicId, setTopicId] = useState<string | null>(null);
   const { busy, run } = useAction();
 
   const submit = async (event: FormEvent): Promise<void> => {
     event.preventDefault();
     if (!title.trim() || busy) return;
-    const result = await run('tasks.create', { title, dueAt: fromLocalInputValue(due) });
+    const result = await run('tasks.create', { title, dueAt: fromLocalInputValue(due), topicId });
     if (result.ok) {
       setTitle('');
       setDue('');
@@ -67,6 +69,7 @@ function TaskComposer() {
         value={due}
         onChange={(event) => setDue(event.target.value)}
       />
+      <TopicSelect value={topicId} onChange={setTopicId} />
       <button type="submit" className="primary" disabled={!title.trim() || busy}>
         添加
       </button>
@@ -74,14 +77,19 @@ function TaskComposer() {
   );
 }
 
-type Mode = 'view' | 'edit' | 'progress';
+type Mode = 'view' | 'edit' | 'progress' | 'followUp';
 
 function TaskCard({ task, focused, onFocused }: { task: TaskDto; focused: boolean; onFocused: () => void }) {
   const [mode, setMode] = useState<Mode>('view');
   const [title, setTitle] = useState(task.title);
   const [due, setDue] = useState(toLocalInputValue(task.dueAt));
   const [progress, setProgress] = useState(task.progressNote);
+  const [topicId, setTopicId] = useState<string | null>(task.topicId);
   const { busy, run } = useAction();
+  const { data: topicList } = useQuery('topics.list', {}, ['topics']);
+  const topic = task.topicId
+    ? [...(topicList?.active ?? []), ...(topicList?.closed ?? [])].find((t) => t.id === task.topicId)
+    : undefined;
   const remove = useDeleteWithUndo();
   const ref = useRef<HTMLLIElement>(null);
   const done = task.status === 'done';
@@ -97,6 +105,7 @@ function TaskCard({ task, focused, onFocused }: { task: TaskDto; focused: boolea
     setTitle(task.title);
     setDue(toLocalInputValue(task.dueAt));
     setProgress(task.progressNote);
+    setTopicId(task.topicId);
     setMode(next);
   };
 
@@ -107,6 +116,7 @@ function TaskCard({ task, focused, onFocused }: { task: TaskDto; focused: boolea
       revision: task.revision,
       title,
       dueAt: fromLocalInputValue(due),
+      topicId,
     });
     if (result.ok) setMode('view');
   };
@@ -135,6 +145,7 @@ function TaskCard({ task, focused, onFocused }: { task: TaskDto; focused: boolea
             value={due}
             onChange={(event) => setDue(event.target.value)}
           />
+          <TopicSelect value={topicId} onChange={setTopicId} />
           <div className="card-actions">
             <button type="submit" className="primary" disabled={busy || !title.trim()}>
               保存
@@ -160,6 +171,7 @@ function TaskCard({ task, focused, onFocused }: { task: TaskDto; focused: boolea
               <p className="meta">
                 {task.dueAt !== null && <span>截止 {formatTime(task.dueAt)}</span>}
                 {done && task.completedAt !== null && <span>完成于 {formatTime(task.completedAt)}</span>}
+                {topic && <span>事项：{topic.title}</span>}
               </p>
               {task.progressNote && mode !== 'progress' && (
                 <p className="progress-note">
@@ -170,7 +182,9 @@ function TaskCard({ task, focused, onFocused }: { task: TaskDto; focused: boolea
               )}
             </div>
           </div>
-          {mode === 'progress' ? (
+          {mode === 'followUp' ? (
+            <FollowUpForm taskId={task.id} onDone={() => setMode('view')} />
+          ) : mode === 'progress' ? (
             <form onSubmit={saveProgress} className="edit-form">
               <textarea
                 aria-label="最新进展"
@@ -196,6 +210,11 @@ function TaskCard({ task, focused, onFocused }: { task: TaskDto; focused: boolea
               <button type="button" onClick={() => begin('progress')} aria-label={`记录进展：${task.title}`}>
                 记录进展
               </button>
+              {!done && (
+                <button type="button" onClick={() => begin('followUp')} aria-label={`约定跟进：${task.title}`}>
+                  约定跟进
+                </button>
+              )}
               <button type="button" onClick={() => begin('edit')} aria-label={`编辑待办：${task.title}`}>
                 编辑
               </button>

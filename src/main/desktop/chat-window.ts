@@ -16,7 +16,7 @@ import {
 import type { CommandResult } from '../../shared/contracts/command';
 import type { CommandService } from '../application/commands';
 import type { Database } from '../storage/database';
-import { actionCards, confirmDraft, dismissDraft } from '../conversation/actions';
+import { actionCards, confirmDraft, dismissDraft, undoAction } from '../conversation/actions';
 import { chatHistory } from '../conversation/conversation-store';
 import type { FetchLike } from '../conversation/model-adapter';
 import type { ModelSettings } from '../conversation/model-settings';
@@ -34,10 +34,11 @@ const ActionArgs = z.tuple([
     z.object({ action: z.literal('dismissDraft'), draftId: Id }),
     z.object({ action: z.literal('rescheduleReminder'), id: Id, revision: z.number().int().positive(), dueAt: z.number().int().positive() }),
     z.object({ action: z.literal('cancelReminder'), id: Id, revision: z.number().int().positive() }),
+    z.object({ action: z.literal('undo'), operationId: Id }),
   ]),
   z.string().min(8).max(100),
 ]);
-const NestTargetArg = z.enum(['notes', 'reminders', 'settings']);
+const NestTargetArg = z.enum(['notes', 'reminders', 'settings', 'topics']);
 
 /** Electron 的 net.fetch 走 Chromium 网络栈，跟随系统代理设置 */
 const electronFetch: FetchLike = (url, init) => net.fetch(url, init);
@@ -77,6 +78,10 @@ export class ChatHost {
           const built = this.models.createAdapter(electronFetch);
           if (built) this.models.markToolsRejected(built.configKey);
         },
+        // 纠正打断了回复：按新上下文重试同一条用户消息（TD §9.4）
+        onSuperseded: (userMessageId) => {
+          void Promise.resolve().then(() => this.retry(userMessageId, `supersede-${crypto.randomUUID()}`));
+        },
       },
       undefined,
       undefined,
@@ -99,7 +104,9 @@ export class ChatHost {
     // 别处（小窝、气泡）改了提醒或笔记：卡片按当前状态重新渲染
     this.disposers.push(
       this.commands.onCommitted((topics) => {
-        if (topics.some((t) => t === 'reminders' || t === 'notes' || t === 'settings')) this.notifyChanged();
+        // 小窝里纠正或忘记了内容：正在生成的回复作废并重来
+        if (topics.includes('context')) this.runner.supersede();
+        if (topics.some((t) => t !== 'conversation')) this.notifyChanged();
       }),
     );
     this.handle(ChatIpc.status, (): ChatStatus => this.status());
@@ -115,6 +122,14 @@ export class ChatHost {
     this.on(ChatIpc.openSettings, () => this.hooks.openSettings());
     this.on(ChatIpc.hide, () => this.hide());
     this.disposers.push(this.models.onChange(() => this.notifyChanged()));
+  }
+
+  /** 跟进到期后“去聊聊”：宠物把问题说出来，然后打开对话（R12） */
+  openFollowUp(inboxId: string): void {
+    const result = this.commands.run('chat.openFollowUp', { inboxId }, { operationId: `followup-open-${inboxId}`, origin: 'ui' });
+    if (!result.ok) console.warn('[chat] open follow-up failed:', result.errorCode);
+    this.notifyChanged();
+    this.open();
   }
 
   /** 单击宠物：打开或收起 */
@@ -181,6 +196,9 @@ export class ChatHost {
         break;
       case 'cancelReminder':
         result = this.commands.run('reminders.cancel', { id: request.id, revision: request.revision }, { operationId, origin: 'ui' });
+        break;
+      case 'undo':
+        result = undoAction(this.db, this.commands, request.operationId, now);
         break;
     }
     this.notifyChanged();

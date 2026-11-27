@@ -151,8 +151,10 @@ function ReminderCard({ reminder }: { reminder: ReminderDto }) {
   const status =
     reminder.status === 'cancelled'
       ? reminder.cancelReason === 'target_deleted'
-        ? '已取消（关联待办已删除）'
-        : '已取消'
+        ? '已取消（关联的事项或待办已删除）'
+        : reminder.cancelReason?.startsWith('target_')
+          ? '已自动取消（关联的事项或待办已结束）'
+          : '已取消'
       : reminder.status === 'materialized'
         ? '已到期'
         : null;
@@ -160,10 +162,14 @@ function ReminderCard({ reminder }: { reminder: ReminderDto }) {
     <li className={`card${reminder.status === 'scheduled' ? '' : ' is-past'}`} aria-label={`提醒：${reminder.content}`}>
       <div className="reminder-row">
         <div>
-          <h3 className="card-title">{reminder.content}</h3>
+          <h3 className="card-title">
+            {reminder.kind === 'follow_up' && <span className="badge">💬 跟进</span>} {reminder.content}
+          </h3>
           <p className="meta">
             <span>{formatTime(reminder.dueAt)}</span>
             {reminder.task && <span>关联待办：{reminder.task.title}</span>}
+            {reminder.topic && <span>事项：{reminder.topic.title}</span>}
+            {reminder.kind === 'follow_up' && reminder.stopPolicy === 'none' && <span>完成后复盘</span>}
             {status && <span>{status}</span>}
           </p>
         </div>

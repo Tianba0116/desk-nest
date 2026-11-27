@@ -1,6 +1,8 @@
 // 对话窗口与模型设置的数据约定（R05、R18）。只放类型和常量。
 
 import type { CommandResult } from './command';
+import type { MemoryDto, TopicDto } from './memory';
+import type { Style } from './preferences';
 import type { ReminderDto } from './reminders';
 
 export type MessageStatus = 'sent' | 'pending_retry' | 'complete' | 'streaming' | 'cancelled' | 'failed' | 'interrupted';
@@ -13,6 +15,10 @@ export interface ChatMessageDto {
   /** 所属轮次：用户消息是最近一次发送或重试的轮次 */
   turnId: string | null;
   createdAt: number;
+  /** 回复生成到一半时内容被纠正或忘记：这条是旧回复，已按新内容重来（TD §9.4） */
+  superseded?: boolean;
+  /** 宠物按约定主动来问的跟进（R12） */
+  followUp?: boolean;
 }
 
 /** 正在想 / 执行中 / 回复中 */
@@ -88,6 +94,16 @@ export interface ActionCardDto {
   note?: { id: string; label: string; deleted: boolean } | null;
   /** 设置后的称呼；null 表示已清除 */
   nickname?: string | null;
+  /** 设置后的表达方式；null 表示默认 */
+  style?: Style | null;
+  /** 事项（按当前状态）；null 表示已删除 */
+  topic?: TopicDto | null;
+  /** 记忆（按当前状态）；null 表示已删除 */
+  memory?: MemoryDto | null;
+  /** 可以撤销（卡片上显示“撤销”） */
+  canUndo?: boolean;
+  /** 已经撤销 */
+  undone?: boolean;
   /** 重复表达确认后只设置了下一次（R08.AC-7） */
   onceOnly?: boolean;
   /** 等待补充信息时的问题 */
@@ -103,9 +119,10 @@ export type ChatActionRequest =
   | { action: 'confirmDraft'; draftId: string }
   | { action: 'dismissDraft'; draftId: string }
   | { action: 'rescheduleReminder'; id: string; revision: number; dueAt: number }
-  | { action: 'cancelReminder'; id: string; revision: number };
+  | { action: 'cancelReminder'; id: string; revision: number }
+  | { action: 'undo'; operationId: string };
 
-export type NestTarget = 'notes' | 'reminders' | 'settings';
+export type NestTarget = 'notes' | 'reminders' | 'settings' | 'topics';
 
 /** 对话流式方案（D-06）：two_phase 两段式；stream_retract 单次流式 + 撤回 */
 export type ConversationStrategy = 'two_phase' | 'stream_retract';

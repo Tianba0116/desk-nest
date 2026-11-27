@@ -60,12 +60,12 @@ describe('一句话操作（M6）', () => {
 
   // ---------- 工具定义 ----------
 
-  it('只开放三个工具，定义由命令注册表生成，并附带 draftId', async () => {
-    expect(core.commands.tools().map((t) => t.toolName).sort()).toEqual(['notes_create', 'preferences_setNickname', 'reminders_create']);
+  it('只开放声明了 tool 的命令，定义由命令注册表生成，并附带 draftId', async () => {
+    expect(core.commands.tools().map((t) => t.toolName).sort()).toEqual(['followUps_create', 'memories_create', 'memories_forget', 'notes_create', 'preferences_setNickname', 'preferences_setStyle', 'reminders_create', 'topics_create', 'topics_forget', 'topics_recordProgress', 'topics_setStatus']);
     const model = mockModel([say('你好'), say('你好')]);
     await turn('你好', model);
     const tools = model.requests[0]?.tools ?? [];
-    expect(tools.map((t) => t.name).sort()).toEqual(['notes_create', 'preferences_setNickname', 'reminders_create']);
+    expect(tools.map((t) => t.name).sort()).toEqual(['followUps_create', 'memories_create', 'memories_forget', 'notes_create', 'preferences_setNickname', 'preferences_setStyle', 'reminders_create', 'topics_create', 'topics_forget', 'topics_recordProgress', 'topics_setStatus']);
     const reminder = tools.find((t) => t.name === 'reminders_create');
     expect(JSON.stringify(reminder?.parameters)).toContain('draftId');
     expect(JSON.stringify(reminder?.parameters)).toContain('relativeDays');
@@ -341,7 +341,7 @@ describe('一句话操作（M6）', () => {
     const prefs = core.queries.run<{ nickname: string; revision: number }>('preferences.get', {});
     expect(core.exec('preferences.setNickname', { nickname: '阿林', revision: prefs.revision + 5 })).toMatchObject({ errorCode: 'REVISION_CONFLICT' });
     core.ok('preferences.setNickname', { nickname: null, revision: prefs.revision });
-    expect(core.queries.run('preferences.get', {})).toEqual({ nickname: null, revision: 0 });
+    expect(core.queries.run('preferences.get', {})).toEqual({ nickname: null, style: null, revision: 0 });
   });
 
   it('记一下：创建笔记，内容里的指令不会被执行', async () => {

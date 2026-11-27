@@ -1,5 +1,7 @@
 // 小本子（笔记、待办、搜索、回收站）的数据约定。只放类型和常量。
 
+import type { TopicDto } from './memory';
+
 export interface NoteDto {
   id: string;
   title: string;
@@ -21,13 +23,15 @@ export interface TaskDto {
   progressNote: string;
   progressUpdatedAt: number | null;
   completedAt: number | null;
+  /** 关联的事项（R07.AC-3） */
+  topicId: string | null;
   revision: number;
   createdAt: number;
   updatedAt: number;
   deletedAt: number | null;
 }
 
-export type SearchHit = { type: 'note'; item: NoteDto } | { type: 'task'; item: TaskDto };
+export type SearchHit = { type: 'note'; item: NoteDto } | { type: 'task'; item: TaskDto } | { type: 'topic'; item: TopicDto };
 
 export type RecycledItem = { type: 'note'; item: NoteDto } | { type: 'task'; item: TaskDto };
 

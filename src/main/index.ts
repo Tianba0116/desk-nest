@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import { app, dialog, net, Notification, powerMonitor, safeStorage, type Tray } from 'electron';
 import { formatTime } from '../shared/format-time';
+import type { NestView } from '../shared/contracts/nest-ipc';
 import type { BubbleItem } from '../shared/contracts/reminders';
 import { AppPrefs } from './application/app-prefs';
 import { createAppCore, openDatabase, type AppCore } from './application/core';
@@ -141,10 +142,11 @@ if (!app.requestSingleInstanceLock()) {
           return { ok: false, error: '保存失败', settings: models.get() };
         }
       },
+      (inboxId) => chat?.openFollowUp(inboxId),
     );
     companion = companionHost;
     companionHost.start();
-    const openNest = (view?: 'inbox' | 'reminders' | 'notes' | 'settings'): void => companionHost.open(view);
+    const openNest = (view?: NestView): void => companionHost.open(view);
 
     // ---------- 对话 ----------
     const chatHost = new ChatHost(appCore.db, appCore.clock, appCore.commands, models, {
@@ -185,6 +187,7 @@ if (!app.requestSingleInstanceLock()) {
       anchor: () => petHost.bounds(),
       onShown: (ids) => presenter?.acknowledge(ids),
       openInbox: () => openNest('inbox'),
+      openFollowUp: (inboxId) => chatHost.openFollowUp(inboxId),
     });
     bubble = bubbleHost;
     bubbleHost.start();
