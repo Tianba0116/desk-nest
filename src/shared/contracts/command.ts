@@ -30,4 +30,4 @@ export const CommandErrorCodes = {
 export type CommandErrorCode = (typeof CommandErrorCodes)[keyof typeof CommandErrorCodes];
 
 /** 数据变化的范围：界面收到后重新查询对应列表（TD §4.2） */
-export type DataTopic = 'notes' | 'tasks' | 'reminders' | 'inbox' | 'settings' | 'conversation' | 'topics' | 'memories' | 'context';
+export type DataTopic = 'notes' | 'tasks' | 'reminders' | 'inbox' | 'settings' | 'conversation' | 'topics' | 'memories' | 'context' | 'focus';

@@ -1,5 +1,9 @@
 import { join } from 'node:path';
-import { app, dialog, net, Notification, powerMonitor, safeStorage, type Tray } from 'electron';
+import { app, dialog, net, Notification, powerMonitor, safeStorage, shell, type Tray } from 'electron';
+import { CLOCK_JUMP_MS } from '../shared/contracts/focus';
+import { createDataActions } from './desktop/data-actions';
+import { activeSession, addAwayTime, focusJob, isFocusRunning, pauseForClockJump } from './domains/focus';
+import { applyPendingDataOp, latestBackup, restoreFromBackup } from './storage/data-management';
 import { formatTime } from '../shared/format-time';
 import type { NestView } from '../shared/contracts/nest-ipc';
 import type { BubbleItem } from '../shared/contracts/reminders';
@@ -43,6 +47,7 @@ if (!app.requestSingleInstanceLock()) {
   let guard: FullscreenGuard | null = null;
   let scheduler: Scheduler | null = null;
   let maintenanceTimer: NodeJS.Timeout | null = null;
+  let clockWatch: NodeJS.Timeout | null = null;
   // 保持引用，避免托盘图标被回收
   let tray: Tray | null = null;
 
@@ -73,21 +78,38 @@ if (!app.requestSingleInstanceLock()) {
   void app.whenReady().then(() => {
     const userData = app.getPath('userData');
 
+    // 上次准备好的恢复或清除：在打开数据库之前执行（R19.AC-3、AC-8）
+    const pending = applyPendingDataOp(userData, Date.now());
+    if (pending.op === 'failed') dialog.showErrorBox('恢复没有完成', `现有数据保持不变。\n\n${pending.message}`);
+
     // 启动顺序（TD §13.1）：数据库与迁移 → 窗口/托盘 → 扫描到期事项 → 恢复展示
     let appCore: AppCore;
     try {
       appCore = createAppCore(openDatabase(userData));
     } catch (error) {
-      // 迁移失败时保留旧数据，不删库重建（R19.AC-5）；完整的恢复界面在 M8
+      // 迁移失败或文件损坏：不删库重建，进入恢复界面（R19.AC-5）
       console.error('[startup] database failed:', error);
-      dialog.showErrorBox(
-        '无法打开数据',
-        `数据库打开或升级失败，原有数据没有被修改。\n数据位置：${userData}\n\n${String(error)}`,
-      );
+      const backup = latestBackup(userData);
+      const choice = dialog.showMessageBoxSync({
+        type: 'error',
+        title: '无法打开数据',
+        message: '数据库打开或升级失败，原有数据没有被修改。',
+        detail: `数据位置：${userData}\n${backup ? `最近的备份：${backup}` : '没有找到备份。'}\n\n${String(error)}`,
+        buttons: backup ? ['从最近的备份恢复', '打开数据文件夹', '退出'] : ['打开数据文件夹', '退出'],
+        defaultId: 0,
+      });
+      if (backup && choice === 0) {
+        const kept = restoreFromBackup(userData, backup, Date.now());
+        dialog.showMessageBoxSync({ type: 'info', message: '已从备份恢复，应用将重启。', detail: `打不开的数据已保留在：${kept}` });
+        app.relaunch();
+      } else if ((backup && choice === 1) || (!backup && choice === 0)) {
+        void shell.openPath(userData);
+      }
       app.exit(1);
       return;
     }
     core = appCore;
+    if (pending.op === 'restore') console.log('[startup] restored from export; previous data at', pending.backupPath);
     // 上次运行中未完成的对话轮次标为中断，不自动重发（TD §7.4）
     interruptUnfinishedTurns(appCore.db, appCore.clock.now());
     appCore.maintain();
@@ -143,6 +165,7 @@ if (!app.requestSingleInstanceLock()) {
         }
       },
       (inboxId) => chat?.openFollowUp(inboxId),
+      createDataActions(() => appCore, userData),
     );
     companion = companionHost;
     companionHost.start();
@@ -158,7 +181,20 @@ if (!app.requestSingleInstanceLock()) {
     chatHost.start();
     const openChat = (): void => chatHost.open();
     petHost.onTouched(() => chatHost.toggle());
-    petHost.setContextMenu(() => petContextMenu(petHost, settings, prefs, { openNest, openChat }));
+    // 专注入口（R09）：托盘和右键菜单
+    const focusActions = {
+      focusActive: () => !!activeSession(appCore.db),
+      startFocus: (minutes: number) => {
+        const r = appCore.commands.run('focus.start', { plannedMinutes: minutes, taskId: null }, { operationId: `menu-${crypto.randomUUID()}`, origin: 'ui' });
+        if (!r.ok) dialog.showMessageBox({ type: 'info', message: r.detail ?? '没有开始' });
+      },
+      endFocus: () => {
+        const active = activeSession(appCore.db);
+        if (active) appCore.commands.run('focus.finish', { id: active.id }, { operationId: `menu-${crypto.randomUUID()}`, origin: 'ui' });
+      },
+    };
+    const menuActions = { openNest, openChat, ...focusActions };
+    petHost.setContextMenu(() => petContextMenu(petHost, settings, prefs, menuActions));
 
     // ---------- 外部全屏 ----------
     const fullscreenGuard = new FullscreenGuard(
@@ -177,6 +213,8 @@ if (!app.requestSingleInstanceLock()) {
     const gate: PopupGate = {
       check() {
         if (prefs.value.quietMode) return { open: false, reason: 'QUIET_MODE' };
+        // 专注进行中：提醒和跟进只进信箱（R08.AC-8）
+        if (isFocusRunning(appCore.db)) return { open: false, reason: 'FOCUS' };
         if (locked) return { open: false, reason: 'LOCKED' };
         if (!petHost.visible) return { open: false, reason: fullscreenGuard.state === true ? 'FULLSCREEN' : 'PET_HIDDEN' };
         return { open: true };
@@ -208,9 +246,10 @@ if (!app.requestSingleInstanceLock()) {
     });
     scheduler = reminderScheduler;
     reminderScheduler.register(reminderJob(() => crypto.randomUUID()));
+    reminderScheduler.register(focusJob(() => crypto.randomUUID()));
 
     appCore.commands.onCommitted((topics) => {
-      if (topics.includes('reminders')) reminderScheduler.tick();
+      if (topics.includes('reminders') || topics.includes('focus')) reminderScheduler.tick();
       if (topics.includes('inbox') || topics.includes('reminders')) reminderPresenter.onInboxChanged();
     });
     petHost.onMoved(() => bubbleHost.reposition());
@@ -218,15 +257,47 @@ if (!app.requestSingleInstanceLock()) {
       if (!petHost.visible) bubbleHost.hide();
     });
 
-    // 睡眠恢复、解锁后主动扫描（TD §8.3）
+    // 睡眠恢复、解锁后主动扫描（TD §8.3）；专注期间锁屏和睡眠的时长单独记录（D-07）
+    let awaySince: number | null = null;
+    const leave = (): void => {
+      awaySince ??= Date.now();
+    };
+    const back = (): void => {
+      if (awaySince !== null) addAwayTime(appCore.db, Date.now() - awaySince, appCore.clock.now());
+      awaySince = null;
+      companionHost.broadcast(['focus']);
+    };
     powerMonitor.on('lock-screen', () => {
       locked = true;
+      leave();
     });
     powerMonitor.on('unlock-screen', () => {
       locked = false;
+      back();
       reminderScheduler.tick();
     });
-    powerMonitor.on('resume', () => reminderScheduler.tick());
+    powerMonitor.on('suspend', leave);
+    powerMonitor.on('resume', () => {
+      back();
+      reminderScheduler.tick();
+    });
+
+    // 系统时间被大幅调整（R09.AC-7）：墙上时钟与单调时钟的差超过阈值时，暂停进行中的专注
+    let lastWall = Date.now();
+    let lastMono = performance.now();
+    clockWatch = setInterval(() => {
+      const wall = Date.now();
+      const mono = performance.now();
+      const jump = wall - lastWall - (mono - lastMono);
+      lastWall = wall;
+      lastMono = mono;
+      if (Math.abs(jump) > CLOCK_JUMP_MS && awaySince === null) {
+        if (pauseForClockJump(appCore.db, appCore.clock.now(), jump, () => crypto.randomUUID())) {
+          companionHost.broadcast(['focus', 'inbox']);
+          reminderPresenter.onInboxChanged();
+        }
+      }
+    }, 30_000);
 
     reminderScheduler.start();
     reminderPresenter.check();
@@ -237,7 +308,7 @@ if (!app.requestSingleInstanceLock()) {
       settings,
       prefs,
       startup,
-      actions: { openNest, openChat },
+      actions: menuActions,
       quit: () => confirmQuit(appCore),
     });
 

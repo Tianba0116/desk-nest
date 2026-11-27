@@ -8,6 +8,7 @@ import {
   type ModelSettingsInput,
   type ModelTestResult,
 } from '../../shared/contracts/chat';
+import { ChatHistorySection, DataSection } from './DataSettings';
 import { MemoriesSection } from './MemoriesSection';
 import { PreferencesSection } from './PreferencesSection';
 
@@ -108,6 +109,8 @@ export function SettingsView() {
 
       <PreferencesSection />
       <MemoriesSection />
+      <ChatHistorySection />
+      <DataSection />
 
       <form className="composer settings-form" onSubmit={save} aria-label="模型设置">
         <h2 className="section-title">模型服务</h2>

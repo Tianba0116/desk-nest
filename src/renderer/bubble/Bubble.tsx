@@ -3,7 +3,9 @@ import type { CommandResult } from '../../shared/contracts/command';
 import type { BubbleItem } from '../../shared/contracts/reminders';
 import { formatTime } from '../../shared/format-time';
 
-async function run(name: 'inbox.markRead' | 'reminders.snooze', input: unknown): Promise<CommandResult> {
+type BubbleCommand = 'inbox.markRead' | 'reminders.snooze' | 'tasks.setStatus' | 'focus.start';
+
+async function run(name: BubbleCommand, input: unknown): Promise<CommandResult> {
   const operationId = `bubble-${crypto.randomUUID()}`;
   try {
     return await window.bubble.command(name, input, operationId);
@@ -33,7 +35,7 @@ export function Bubble() {
     if (ref.current) window.bubble.resize(ref.current.getBoundingClientRect().height + 16);
   }, [items, error]);
 
-  const act = async (name: 'inbox.markRead' | 'reminders.snooze', input: unknown): Promise<void> => {
+  const act = async (name: BubbleCommand, input: unknown): Promise<void> => {
     setBusy(true);
     try {
       const result = await run(name, input);
@@ -52,7 +54,11 @@ export function Bubble() {
     <div className="bubble" ref={ref} role="alertdialog" aria-labelledby="bubble-title">
       <div className="bubble-head">
         <span id="bubble-title">
-          {single?.kind === 'follow_up' ? '💬 约好的跟进' : `⏰ ${single ? '到点啦' : `有 ${items.length} 个提醒到期`}`}
+          {single?.kind === 'follow_up'
+            ? '💬 约好的跟进'
+            : single?.kind === 'focus'
+              ? '⏳ 专注结束'
+              : `⏰ ${single ? '到点啦' : `有 ${items.length} 个提醒到期`}`}
         </span>
         <button type="button" className="icon" aria-label="收起（不影响信箱）" title="收起（不影响信箱）" onClick={() => window.bubble.close()}>
           ×
@@ -81,7 +87,33 @@ export function Bubble() {
             去聊聊
           </button>
         )}
-        {single && (
+        {single?.kind === 'focus' && single.task && single.task.status === 'open' && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() =>
+              void act('tasks.setStatus', { id: single.task?.id, status: 'done' }).then(() =>
+                act('inbox.markRead', { ids: [single.inboxId] }),
+              )
+            }
+          >
+            完成“{single.task.title}”
+          </button>
+        )}
+        {single?.kind === 'focus' && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() =>
+              void act('focus.start', { plannedMinutes: single.plannedMinutes ?? 25, taskId: single.task?.id ?? null }).then(() =>
+                act('inbox.markRead', { ids: [single.inboxId] }),
+              )
+            }
+          >
+            再来一轮
+          </button>
+        )}
+        {single && single.kind !== 'focus' && (
           <button type="button" disabled={busy} onClick={() => void act('reminders.snooze', { id: single.reminderId, minutes: 10 })}>
             {single.kind === 'follow_up' ? '10 分钟后再问' : '10 分钟后再提醒'}
           </button>

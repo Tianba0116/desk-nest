@@ -336,3 +336,12 @@ button.icon {
 .msg-meta .follow {
   color: var(--accent);
 }
+
+.msg-delete {
+  opacity: 0.6;
+}
+
+.msg:hover .msg-delete,
+.msg-delete:focus-visible {
+  opacity: 1;
+}

@@ -21,7 +21,7 @@ export const BubbleIpc = {
 } as const;
 
 /** 气泡里允许执行的命令 */
-export const BUBBLE_COMMANDS = ['inbox.markRead', 'reminders.snooze'] as const;
+export const BUBBLE_COMMANDS = ['inbox.markRead', 'reminders.snooze', 'tasks.setStatus', 'focus.start'] as const;
 
 export interface BubbleBridge {
   onItems(listener: (items: BubbleItem[]) => void): () => void;

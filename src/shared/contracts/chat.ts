@@ -120,7 +120,8 @@ export type ChatActionRequest =
   | { action: 'dismissDraft'; draftId: string }
   | { action: 'rescheduleReminder'; id: string; revision: number; dueAt: number }
   | { action: 'cancelReminder'; id: string; revision: number }
-  | { action: 'undo'; operationId: string };
+  | { action: 'undo'; operationId: string }
+  | { action: 'deleteMessage'; messageId: string };
 
 export type NestTarget = 'notes' | 'reminders' | 'settings' | 'topics';
 

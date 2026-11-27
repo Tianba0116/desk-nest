@@ -35,6 +35,7 @@ const ActionArgs = z.tuple([
     z.object({ action: z.literal('rescheduleReminder'), id: Id, revision: z.number().int().positive(), dueAt: z.number().int().positive() }),
     z.object({ action: z.literal('cancelReminder'), id: Id, revision: z.number().int().positive() }),
     z.object({ action: z.literal('undo'), operationId: Id }),
+    z.object({ action: z.literal('deleteMessage'), messageId: Id }),
   ]),
   z.string().min(8).max(100),
 ]);
@@ -199,6 +200,9 @@ export class ChatHost {
         break;
       case 'undo':
         result = undoAction(this.db, this.commands, request.operationId, now);
+        break;
+      case 'deleteMessage':
+        result = this.commands.run('chat.deleteMessage', { messageId: request.messageId }, { operationId, origin: 'ui' });
         break;
     }
     this.notifyChanged();

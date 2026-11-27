@@ -31,6 +31,7 @@ import type { JobHandler } from '../application/scheduler';
 import type { Database } from '../storage/database';
 import { findTask } from './tasks';
 import { findTopic } from './topics';
+import { focusDtoById, focusNotice } from './focus';
 
 interface ActionRow {
   id: string;
@@ -619,7 +620,7 @@ export function takePopupCandidates(db: Database, now: number): BubbleItem[] {
     now,
     now - MISSED_POPUP_WINDOW_MS,
   );
-  return db
+  const planned = db
     .all<BubbleRow>(
       `SELECT i.id, i.source_id, a.kind, a.content, i.due_at FROM inbox_items i
        JOIN scheduled_actions a ON a.id = i.source_id AND a.revision = i.source_revision
@@ -628,6 +629,49 @@ export function takePopupCandidates(db: Database, now: number): BubbleItem[] {
        ORDER BY i.due_at LIMIT 20`,
     )
     .map((r) => toBubbleItem(db, r));
+  const focus = db
+    .all<{ id: string; source_id: string; due_at: number }>(
+      `SELECT id, source_id, due_at FROM inbox_items
+       WHERE status = 'unread' AND shown_at IS NULL AND popup_skipped_at IS NULL AND category = 'focus'
+       ORDER BY due_at LIMIT 5`,
+    )
+    .flatMap((r) => {
+      const item = focusBubbleItem(db, r.id, r.source_id, r.due_at);
+      return item ? [item] : [];
+    });
+  return [...planned, ...focus].sort((a, b) => a.dueAt - b.dueAt);
+}
+
+/** 专注结束的气泡（R09.AC-2）：由用户选择完成待办、再来一轮或去记录进展 */
+function focusBubbleItem(db: Database, inboxId: string, sessionId: string, dueAt: number): BubbleItem | null {
+  const session = db.get<{ id: string }>('SELECT id FROM focus_sessions WHERE id = ?', sessionId);
+  if (!session) return null;
+  const dto = focusDtoById(db, sessionId);
+  return {
+    inboxId,
+    kind: 'focus',
+    reminderId: sessionId,
+    content: focusNotice(db, sessionId, 'focus'),
+    dueAt,
+    task: dto?.task && !dto.task.deleted ? { id: dto.task.id, title: dto.task.title, status: dto.task.status } : null,
+    plannedMinutes: dto ? Math.round(dto.plannedMs / 60_000) : 25,
+  };
+}
+
+/** 按信箱项取气泡内容（展示前再核验仍是未读，TD §11） */
+export function bubbleItemById(db: Database, inboxId: string): BubbleItem | null {
+  const row = db.get<{ id: string; category: string; source_id: string; due_at: number | null }>(
+    `SELECT id, category, source_id, due_at FROM inbox_items WHERE id = ? AND status = 'unread'`,
+    inboxId,
+  );
+  if (!row) return null;
+  if (row.category === 'focus') return focusBubbleItem(db, row.id, row.source_id, row.due_at ?? 0);
+  const action = db.get<BubbleRow>(
+    `SELECT i.id, i.source_id, a.kind, a.content, i.due_at FROM inbox_items i
+     JOIN scheduled_actions a ON a.id = i.source_id WHERE i.id = ?`,
+    inboxId,
+  );
+  return action ? toBubbleItem(db, action) : null;
 }
 
 export interface BubbleRow {
@@ -719,13 +763,16 @@ export const reminderQueries = [
            ORDER BY created_at DESC LIMIT 200`,
         )
         .map((row) => {
-          const action = findReminder(db, row.source_id);
+          const isFocus = row.category === 'focus' || row.category === 'focus_paused';
+          const action = isFocus ? undefined : findReminder(db, row.source_id);
           const text =
             row.category === 'follow_up'
               ? followUpQuestion(db, row.source_id)
               : row.category === 'auto_cancelled'
                 ? autoCancelText(db, row.source_id)
-                : undefined;
+                : isFocus
+                  ? focusNotice(db, row.source_id, row.category)
+                  : undefined;
           return {
             id: row.id,
             category: row.category,
@@ -735,7 +782,8 @@ export const reminderQueries = [
             createdAt: row.created_at,
             readAt: row.read_at,
             reminder: action ? toReminderDto(db, action) : null,
-            stale: row.category === 'auto_cancelled' ? false : !action || action.revision !== row.source_revision,
+            ...(isFocus ? { focus: focusDtoById(db, row.source_id) } : {}),
+            stale: row.category === 'auto_cancelled' || isFocus ? false : !action || action.revision !== row.source_revision,
           };
         }),
   }),

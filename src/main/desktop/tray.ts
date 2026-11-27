@@ -1,7 +1,7 @@
 import { app, Menu, Tray } from 'electron';
 import type { AppPrefs } from '../application/app-prefs';
 import type { PetHost } from './pet-host';
-import { petSettingsMenuItems, quietModeMenuItem, type PetMenuActions } from './pet-menu';
+import { focusMenuItem, petSettingsMenuItems, quietModeMenuItem, type PetMenuActions } from './pet-menu';
 import type { PetSettingsService } from './pet-settings';
 import type { StartupSetting } from './startup';
 import { createTrayIcon } from './tray-icon';
@@ -27,6 +27,8 @@ export function createPetTray({ host, settings, prefs, startup, actions, quit }:
         { label: '对话', click: () => actions.openChat() },
         { label: '打开小窝', click: () => actions.openNest() },
         { label: '信箱', click: () => actions.openNest('inbox') },
+        focusMenuItem(actions),
+        { label: '沙漏（专注）', click: () => actions.openNest('focus') },
         { label: '模型设置', click: () => actions.openNest('settings') },
         { type: 'separator' },
         { label: host.visible ? '隐藏宠物' : '显示宠物', click: () => host.toggle() },

@@ -13,6 +13,7 @@ import {
   type StartupState,
   type SystemRequest,
 } from '../../shared/contracts/nest-ipc';
+import type { DataRequest, DataResponse } from '../../shared/contracts/nest-ipc';
 import type { CommandService } from '../application/commands';
 import { QueryError, type QueryService } from '../application/queries';
 import { hardenWebContents } from './web-contents';
@@ -61,6 +62,7 @@ export class CompanionHost {
     private readonly system: SystemActions,
     private readonly model: ModelActions,
     private readonly followUp: (inboxId: string) => void = () => undefined,
+    private readonly data: (request: DataRequest) => Promise<DataResponse> = async () => ({ ok: false, message: '不可用' }),
   ) {}
 
   start(): void {
@@ -89,6 +91,9 @@ export class CompanionHost {
     this.handle(NestIpc.system, (_event, request) => this.system(SystemRequestSchema.parse(request)));
     this.handle(NestIpc.model, (_event, request) => this.model(ModelRequestSchema.parse(request)));
     this.handle(NestIpc.followUp, (_event, inboxId) => this.followUp(z.string().min(1).max(100).parse(inboxId)));
+    this.handle(NestIpc.data, (_event, request) =>
+      this.data(z.object({ action: z.enum(['export', 'restore', 'clear', 'openFolder']) }).parse(request) as DataRequest),
+    );
 
     this.disposers.push(this.commands.onCommitted((topics) => this.broadcast(topics)));
   }

@@ -1,10 +1,11 @@
 import type { InboxItemDto } from '../../shared/contracts/reminders';
 import { formatTime } from '../../shared/format-time';
 import { useQuery } from './api';
+import { FocusResult } from './FocusView';
 import { useAction } from './useAction';
 
 export function InboxView() {
-  const { data: items } = useQuery('inbox.list', {}, ['inbox', 'reminders']);
+  const { data: items } = useQuery('inbox.list', {}, ['inbox', 'reminders', 'focus', 'tasks']);
   const { busy, run } = useAction();
   const unread = items?.filter((i) => i.status === 'unread').length ?? 0;
 
@@ -33,6 +34,31 @@ function InboxCard({ item }: { item: InboxItemDto }) {
   const { busy, run } = useAction();
   const r = item.reminder;
   const unread = item.status === 'unread';
+
+  // 专注结束（R09.AC-2）：由你选择完成待办、记录进展或再来一轮；因时间调整暂停的提示（R09.AC-7）
+  if (item.category === 'focus' || item.category === 'focus_paused') {
+    return (
+      <li className={`card inbox-card${unread ? ' is-unread' : ''}`} aria-label={`${unread ? '未读' : '已读'}：${item.text ?? '专注'}`}>
+        <div className="inbox-head">
+          {unread && <span className="unread-dot" aria-hidden="true" />}
+          <span className="badge">⏳ 专注</span>
+          <h3 className="card-title-inline">{item.text}</h3>
+        </div>
+        {item.category === 'focus' && item.focus && (
+          <ul className="card-list" role="list">
+            <FocusResult session={item.focus} latest={item.focus.status !== 'running' && item.focus.status !== 'paused'} />
+          </ul>
+        )}
+        {unread && (
+          <div className="card-actions spaced">
+            <button type="button" disabled={busy} onClick={() => void run('inbox.markRead', { ids: [item.id] })}>
+              知道了
+            </button>
+          </div>
+        )}
+      </li>
+    );
+  }
 
   // 跟进因对象完成或删除而自动取消的说明（R12.AC-5）
   if (item.category === 'auto_cancelled') {

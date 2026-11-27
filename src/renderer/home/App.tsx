@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { NestView } from '../../shared/contracts/nest-ipc';
 import { useQuery } from './api';
+import { FocusView } from './FocusView';
 import { InboxView } from './InboxView';
 import { NotesView } from './NotesView';
 import { RecycleView } from './RecycleView';
@@ -17,6 +18,7 @@ const SECTIONS: Array<{ label: string; views: Array<{ id: NestView; label: strin
     views: [
       { id: 'inbox', label: '信箱', icon: '📬' },
       { id: 'reminders', label: '提醒', icon: '⏰' },
+      { id: 'focus', label: '沙漏', icon: '⏳' },
     ],
   },
   {
@@ -38,7 +40,7 @@ export function App() {
   const [view, setView] = useState<NestView>('notes');
   const [query, setQuery] = useState('');
   const [focusId, setFocusId] = useState<string | null>(null);
-  const { data: unread } = useQuery('inbox.unreadCount', {}, ['inbox', 'reminders']);
+  const { data: unread } = useQuery('inbox.unreadCount', {}, ['inbox', 'reminders', 'focus']);
 
   useEffect(
     () =>
@@ -121,6 +123,8 @@ export function App() {
               <TasksView focusId={focusId} onFocused={() => setFocusId(null)} />
             ) : view === 'topics' ? (
               <TopicsView />
+            ) : view === 'focus' ? (
+              <FocusView />
             ) : (
               <RecycleView />
             )}

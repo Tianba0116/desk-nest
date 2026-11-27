@@ -3,6 +3,7 @@
 import type { ConversationStrategy, ModelSettingsDto, ModelSettingsInput, ModelTestResult } from './chat';
 import type { CommandResult, DataTopic } from './command';
 import type { NoteDto, RecycledItem, SearchHit, TaskDto } from './notebook';
+import type { FocusDto } from './focus';
 import type { MemoryDto, TopicDetailDto, TopicDto } from './memory';
 import type { PreferencesDto } from './preferences';
 import type { InboxItemDto, ReminderDto } from './reminders';
@@ -22,9 +23,15 @@ export const NestIpc = {
   model: 'nest:model',
   /** 渲染层 → 主进程（invoke）：(inboxId) 跟进到期后“去聊聊”，打开对话 */
   followUp: 'nest:follow-up',
+  /** 渲染层 → 主进程（invoke）：数据导出、恢复、清除，见 DataRequest */
+  data: 'nest:data',
 } as const;
 
-export type NestView = 'inbox' | 'reminders' | 'notes' | 'tasks' | 'topics' | 'recycle' | 'settings';
+/** 设置页“数据”（R19.AC-3、AC-8） */
+export type DataRequest = { action: 'export' } | { action: 'restore' } | { action: 'clear' } | { action: 'openFolder' };
+export type DataResponse = { ok: boolean; message: string };
+
+export type NestView = 'inbox' | 'reminders' | 'focus' | 'notes' | 'tasks' | 'topics' | 'recycle' | 'settings';
 
 export type ModelRequest =
   | { action: 'get' }
@@ -61,6 +68,8 @@ export interface NestQueries {
   'preferences.get': { input: Record<string, never>; output: PreferencesDto };
   'topics.list': { input: Record<string, never>; output: { active: TopicDetailDto[]; closed: TopicDetailDto[]; forgotten: TopicDto[] } };
   'memories.list': { input: Record<string, never>; output: { active: MemoryDto[]; forgotten: MemoryDto[] } };
+  'focus.state': { input: Record<string, never>; output: { active: FocusDto | null; recent: FocusDto[] } };
+  'chat.settings': { input: Record<string, never>; output: { retentionDays: 30 | 90 | null; messageCount: number } };
 }
 
 export type QueryName = keyof NestQueries;
@@ -77,5 +86,6 @@ export interface NestBridge {
   onNavigate(listener: (view: NestView) => void): () => void;
   system(request: SystemRequest): Promise<StartupState>;
   openFollowUp(inboxId: string): Promise<void>;
+  data(request: DataRequest): Promise<DataResponse>;
   model(request: ModelRequest): Promise<ModelResponse>;
 }

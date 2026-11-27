@@ -1,5 +1,7 @@
 // 提醒与信箱的数据约定（R08、R15）。只放类型和常量。
 
+import type { FocusDto } from './focus';
+
 export type ReminderStatus = 'scheduled' | 'materialized' | 'cancelled';
 
 export interface ReminderDto {
@@ -27,7 +29,7 @@ export type InboxStatus = 'unread' | 'read' | 'dismissed' | 'invalidated';
 export interface InboxItemDto {
   id: string;
   /** reminder 提醒到期；follow_up 跟进到期；auto_cancelled 跟进因对象完成或删除而自动取消（R12.AC-5） */
-  category: 'reminder' | 'follow_up' | 'auto_cancelled';
+  category: 'reminder' | 'follow_up' | 'auto_cancelled' | 'focus' | 'focus_paused';
   status: InboxStatus;
   /** 这张卡片对应的到期时间（入箱时的版本） */
   dueAt: number | null;
@@ -39,13 +41,20 @@ export interface InboxItemDto {
   stale: boolean;
   /** 跟进：按对象的最新状态生成的问题（R12.AC-4）；自动取消：说明原因 */
   text?: string;
+  /** 专注结束或因时间调整暂停（R09） */
+  focus?: FocusDto | null;
 }
 
 /** 气泡中的一项 */
 export interface BubbleItem {
   inboxId: string;
-  kind: 'reminder' | 'follow_up';
+  kind: 'reminder' | 'follow_up' | 'focus';
+  /** 提醒或跟进的 id；专注时是会话 id */
   reminderId: string;
+  /** 专注结束：关联的待办（可以在气泡上直接完成） */
+  task?: { id: string; title: string; status: 'open' | 'done' } | null;
+  /** 专注结束：计划分钟数（“再来一轮”用） */
+  plannedMinutes?: number;
   content: string;
   dueAt: number;
 }

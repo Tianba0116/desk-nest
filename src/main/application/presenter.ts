@@ -3,15 +3,7 @@
 // 只进信箱，可选另发系统通知，以后不补弹。
 
 import type { BubbleItem } from '../../shared/contracts/reminders';
-import {
-  markShown,
-  skipPopups,
-  stillUnread,
-  takePopupCandidates,
-  toBubbleItem,
-  unreadCount,
-  type BubbleRow,
-} from '../domains/reminders';
+import { bubbleItemById, markShown, skipPopups, stillUnread, takePopupCandidates, unreadCount } from '../domains/reminders';
 import type { Database } from '../storage/database';
 import type { Clock } from './clock';
 
@@ -95,12 +87,8 @@ export class ReminderPresenter {
   private itemsFor(inboxIds: readonly string[]): BubbleItem[] {
     const { db } = this.options;
     return inboxIds.flatMap((id) => {
-      const row = db.get<BubbleRow>(
-        `SELECT i.id, i.source_id, a.kind, a.content, i.due_at FROM inbox_items i
-         JOIN scheduled_actions a ON a.id = i.source_id WHERE i.id = ? AND i.status = 'unread'`,
-        id,
-      );
-      return row ? [toBubbleItem(db, row)] : [];
+      const item = bubbleItemById(db, id);
+      return item ? [item] : [];
     });
   }
 }

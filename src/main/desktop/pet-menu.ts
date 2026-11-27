@@ -1,6 +1,7 @@
 // 宠物相关菜单项：右键菜单和托盘菜单共用，保证宠物窗口的功能都能从托盘完成（R21.AC-4）。
 
 import type { MenuItemConstructorOptions } from 'electron';
+import type { NestView } from '../../shared/contracts/nest-ipc';
 import { PET_SIZE_LABELS, PET_SIZES } from '../../shared/contracts/pet-settings';
 import type { AppPrefs } from '../application/app-prefs';
 import type { PetHost } from './pet-host';
@@ -35,8 +36,19 @@ export function petSettingsMenuItems(settings: PetSettingsService): MenuItemCons
 
 /** 菜单里打开其他窗口的入口，由组合根提供 */
 export interface PetMenuActions {
-  openNest(view?: 'inbox' | 'reminders' | 'settings'): void;
+  openNest(view?: NestView): void;
   openChat(): void;
+  /** 专注（R09）：进行中时返回 true */
+  focusActive(): boolean;
+  startFocus(minutes: number): void;
+  endFocus(): void;
+}
+
+/** 专注入口：托盘和右键菜单共用 */
+export function focusMenuItem(actions: PetMenuActions): MenuItemConstructorOptions {
+  return actions.focusActive()
+    ? { label: '结束专注', click: () => actions.endFocus() }
+    : { label: '开始专注 25 分钟', click: () => actions.startFocus(25) };
 }
 
 /** 安静模式（R01.AC-2、R08.AC-8）：提醒只进信箱，不弹气泡 */
@@ -61,6 +73,7 @@ export function petContextMenu(
     { label: '打开小窝', click: () => actions.openNest() },
     { label: '信箱', click: () => actions.openNest('inbox') },
     { label: '新建提醒', click: () => actions.openNest('reminders') },
+    focusMenuItem(actions),
     { type: 'separator' },
     quietModeMenuItem(prefs),
     { label: '隐藏宠物', click: () => host.hide() },

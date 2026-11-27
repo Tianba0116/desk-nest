@@ -8,10 +8,21 @@ files:
   - package.json
 asar: true
 win:
-  # M1 只出解压版；安装包在 M8（R20）加入。签名与图标写入暂不启用（D-12）。
+  # 安装版（M8，R20.AC-1）+ 解压版 + zip。签名与图标写入暂不启用（D-12）。
   target:
+    - target: nsis
+      arch: [x64]
     - target: dir
       arch: [x64]
     - target: zip
       arch: [x64]
   signAndEditExecutable: false
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  # 数据在 %APPDATA%\desk-nest，不在安装目录（R19.AC-1）；卸载时由 build/installer.nsh 询问是否删除（D-09）
+  deleteAppDataOnUninstall: false
+  include: build/installer.nsh
+  artifactName: ${productName}-${version}-setup.${ext}
+  shortcutName: DeskNest

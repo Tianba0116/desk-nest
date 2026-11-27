@@ -131,6 +131,14 @@ export function Chat() {
     }
   };
 
+  /** 删除单条消息（R19.AC-7）：用户消息连同它的回复一起删除 */
+  const removeMessage = async (m: ChatMessageDto): Promise<void> => {
+    const what = m.role === 'user' ? '这条消息和它的回复' : '这条回复';
+    if (!window.confirm(`删除${what}？删除后不能恢复，宠物也不会再参考它。`)) return;
+    const result = await window.chat.action({ action: 'deleteMessage', messageId: m.id }, `del-${crypto.randomUUID()}`);
+    if (!result.ok) setNotice({ text: result.errorCode === 'INVALID_STATE' ? '回复进行中，稍后再删除' : '删除没有成功' });
+  };
+
   const anchored = anchorCards(messages, cards);
   // 停止或失败、但已经有操作执行了：如实标为“部分完成”（R05.AC-2）
   const doneTurns = new Set(cards.filter((c) => c.state === 'done').map((c) => c.turnId));
@@ -205,6 +213,16 @@ export function Chat() {
               {retryable.has(m.id) && !busy && (
                 <button type="button" className="link" onClick={() => void retry(m.id)}>
                   重试
+                </button>
+              )}
+              {!busy && (
+                <button
+                  type="button"
+                  className="link msg-delete"
+                  aria-label={`删除这条消息：${m.content.slice(0, 20)}`}
+                  onClick={() => void removeMessage(m)}
+                >
+                  删除
                 </button>
               )}
             </div>

@@ -229,4 +229,34 @@ export const MIGRATIONS: readonly Migration[] = [
       ALTER TABLE turns ADD COLUMN context_epoch INTEGER;
     `,
   },
+  {
+    version: 6,
+    name: 'M8：专注',
+    sql: `
+      -- 专注计时的唯一真相（TD §8.4）：running 保存 due_at，paused 保存 remaining_ms
+      CREATE TABLE focus_sessions (
+        id TEXT PRIMARY KEY,
+        task_id TEXT,
+        status TEXT NOT NULL CHECK (status IN ('running', 'paused', 'completed', 'expired', 'finished', 'cancelled')),
+        -- 进行中（含暂停）时为 1，否则为 NULL：唯一索引保证同一时刻最多一个（R09.AC-1）
+        active_slot INTEGER,
+        planned_ms INTEGER NOT NULL,
+        run_ms INTEGER NOT NULL DEFAULT 0,
+        segment_started_at INTEGER,
+        due_at INTEGER,
+        remaining_ms INTEGER,
+        pause_reason TEXT,
+        away_ms INTEGER NOT NULL DEFAULT 0,
+        counted_ms INTEGER,
+        settled_late INTEGER NOT NULL DEFAULT 0,
+        started_at INTEGER NOT NULL,
+        ended_at INTEGER,
+        revision INTEGER NOT NULL DEFAULT 1,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE UNIQUE INDEX focus_one_active ON focus_sessions (active_slot);
+      CREATE INDEX focus_due ON focus_sessions (status, due_at);
+    `,
+  },
 ];
